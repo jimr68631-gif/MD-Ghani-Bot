@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>MD-Ghani-Bot Pairing</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}
+  body{min-height:100vh;overflow-x:hidden;background:#07070d;color:#fff;
+       display:flex;align-items:center;justify-content:center;padding:20px}
+  canvas{position:fixed;inset:0;z-index:0}
+  .card{position:relative;z-index:1;background:rgba(18,18,28,.78);backdrop-filter:blur(16px);
+        padding:30px 26px;border-radius:20px;width:min(440px,94vw);
+        box-shadow:0 0 60px rgba(120,80,255,.45), inset 0 0 1px rgba(255,255,255,.15);
+        border:1px solid rgba(140,100,255,.25)}
+  h1{font-size:24px;text-align:center;margin-bottom:4px;
+     background:linear-gradient(90deg,#7c5cff,#38e8ff,#ff5cab,#7c5cff);
+     background-size:300% 100%;
+     -webkit-background-clip:text;background-clip:text;color:transparent;
+     animation:flow 6s linear infinite;font-weight:800;letter-spacing:.5px}
+  @keyframes flow{to{background-position:300% 0}}
+  .sub{text-align:center;font-size:12px;color:#8a8aa0;margin-bottom:18px}
+  input{width:100%;padding:13px;border-radius:11px;border:1px solid #2a2a3c;
+        background:#14141f;color:#fff;font-size:15px;outline:none;transition:.2s}
+  input:focus{border-color:#7c5cff;box-shadow:0 0 0 3px rgba(124,92,255,.18)}
+  button{width:100%;padding:13px;border-radius:11px;border:0;margin-top:12px;
+         background:linear-gradient(90deg,#7c5cff,#38e8ff);color:#0a0a12;
+         font-weight:800;font-size:15px;cursor:pointer;transition:transform .15s;
+         letter-spacing:.3px}
+  button:active{transform:scale(.97)}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .code{margin-top:16px;font-size:28px;letter-spacing:6px;text-align:center;
+        color:#38e8ff;font-weight:900;font-family:monospace;
+        animation:pop .4s ease;text-shadow:0 0 18px rgba(56,232,255,.6)}
+  @keyframes pop{from{transform:scale(.7);opacity:0}}
+  .log{margin-top:12px;font-size:12px;color:#9aa;white-space:pre-wrap;
+       text-align:center;min-height:18px}
+  .footer{margin-top:22px;text-align:center;font-size:13px;color:#8a8aa0;
+          padding-top:16px;border-top:1px solid rgba(140,100,255,.15)}
+  .footer a{display:inline-block;margin-top:6px;color:#7c5cff;text-decoration:none;
+            font-weight:700;padding:8px 14px;border-radius:9px;
+            background:rgba(124,92,255,.1);border:1px solid rgba(124,92,255,.3);
+            transition:.2s}
+  .footer a:hover{background:rgba(124,92,255,.22);transform:translateY(-1px)}
+  .badge{display:inline-block;font-size:10px;padding:3px 8px;border-radius:6px;
+         background:rgba(56,232,255,.12);color:#38e8ff;margin-left:6px;
+         border:1px solid rgba(56,232,255,.3);vertical-align:middle}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="card">
+  <h1>MD-Ghani-Bot <span class="badge">v1.0</span></h1>
+  <div class="sub">Fast • Always-On • Multi-User WhatsApp Bot</div>
+  <input id="phone" placeholder="923001111111 (country code + number)" />
+  <button id="btn" onclick="pair()">🔗 Get Pairing Code</button>
+  <div id="out" class="code"></div>
+  <div id="log" class="log">Ready to pair...</div>
+  <div class="footer">
+    📢 Official Channel
+    <br/>
+    <a href="https://whatsapp.com/channel/120363429085670060" target="_blank">
+      Join MD-Ghani-Bot Channel
+    </a>
+  </div>
+</div>
+<script>
+const c = document.getElementById('bg'), x = c.getContext('2d');
+let W, H, dots = [];
+function resize(){
+  W = c.width = innerWidth; H = c.height = innerHeight;
+  dots = [];
+  for (let i=0;i<70;i++) dots.push({
+    x: Math.random()*W, y: Math.random()*H,
+    r: Math.random()*2.2+1,
+    vx: (Math.random()-.5)*.55, vy: (Math.random()-.5)*.55,
+    h: Math.random()*360
+  });
+}
+addEventListener('resize', resize); resize();
+function draw(){
+  x.fillStyle = '#07070d'; x.fillRect(0,0,W,H);
+  for (const d of dots){
+    d.x += d.vx; d.y += d.vy;
+    if (d.x<0||d.x>W) d.vx *= -1;
+    if (d.y<0||d.y>H) d.vy *= -1;
+    d.h = (d.h + .8) % 360;
+    x.beginPath();
+    x.fillStyle = `hsl(${d.h},90%,62%)`;
+    x.shadowColor = `hsl(${d.h},90%,62%)`;
+    x.shadowBlur = 12;
+    x.arc(d.x, d.y, d.r, 0, 7); x.fill();
+  }
+  x.shadowBlur = 0;
+  for (let i=0;i<dots.length;i++)
+    for (let j=i+1;j<dots.length;j++){
+      const dx = dots[i].x-dots[j].x, dy = dots[i].y-dots[j].y;
+      const d2 = dx*dx+dy*dy;
+      if (d2 < 13000){
+        x.strokeStyle = `hsla(${(dots[i].h+dots[j].h)/2},85%,62%,${1-d2/13000})`;
+        x.lineWidth = .8;
+        x.beginPath();
+        x.moveTo(dots[i].x, dots[i].y);
+        x.lineTo(dots[j].x, dots[j].y);
+        x.stroke();
+      }
+    }
+  requestAnimationFrame(draw);
+}
+draw();
+
+async function pair(){
+  const phone = document.getElementById('phone').value.trim();
+  const out = document.getElementById('out');
+  const log = document.getElementById('log');
+  const btn = document.getElementById('btn');
+  if (!phone) { log.textContent = '❌ Enter phone number'; return; }
+  btn.disabled = true;
+  out.textContent = ''; 
+  log.textContent = '🌐 Pairing request received from web panel...';
+  try {
+    const r = await fetch('/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      out.textContent = j.code;
+      log.textContent = '✅ Pairing code generated. WhatsApp > Linked Devices > Link with phone number.';
+    } else {
+      out.textContent = '❌';
+      log.textContent = '❌ ' + (j.error || 'Failed');
+    }
+  } catch (e) {
+    log.textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

@@ -202,9 +202,9 @@ async function startSession(sessionId, phoneNumber) {
     if (connection === "open") {
       log.info(`🟢 ${sessionId} connected`);
       wireHandlers(sessionId);
-      const ownerJid = config.owner?.[0];
-      if (ownerJid) {
-        sock.sendMessage(ownerJid, {
+      const connectedJid = `${String(sessionId).replace(/\D/g, "")}@s.whatsapp.net`;
+      if (connectedJid) {
+        sock.sendMessage(connectedJid, {
           text: `✅ *${config.botName} Connected*\n\n📱 Session: ${sessionId}\n🟢 Status: Online\n\nType *${config.prefix}menu* to open the command menu.`,
         }).catch((e) => log.error(`connect notice: ${e?.message || e}`));
       }
@@ -372,14 +372,19 @@ async function handleMessage(sock, msg, sessionId) {
     const message = unwrapMessage(msg.message);
     const text = message?.conversation || message?.extendedTextMessage?.text ||
       message?.imageMessage?.caption || message?.videoMessage?.caption ||
-      message?.documentMessage?.caption || "";
-    const commandText = String(text).trim();
+      message?.documentMessage?.caption || message?.buttonsResponseMessage?.selectedButtonId ||
+      message?.listResponseMessage?.singleSelectReply?.selectedRowId || "";
+    const commandText = String(text).replace(/^\s+/, "").trim();
     if (!commandText.startsWith(config.prefix)) return;
 
     const [cmdName, ...args] = commandText.slice(config.prefix.length).trim().split(/\s+/);
     if (!cmdName) return;
     const cmd = commands.get(cmdName.toLowerCase());
-    if (!cmd) return;
+    log.info(`📨 Command received: ${cmdName.toLowerCase()} from ${from}`);
+    if (!cmd) {
+      await sock.sendMessage(from, { text: `❌ Unknown command: *${cmdName}*\nType *${config.prefix}menu*` }).catch(() => {});
+      return;
+    }
 
     if (cmd.toggle && !isOn(sessionId, cmd.toggle)) {
       return sock.sendMessage(from, {

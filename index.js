@@ -29,6 +29,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
+const downloadMedia = (sock, message) => sock.downloadMediaMessage(message, "buffer", {}, { logger: pino({ level: "silent" }) });
 
 /* ============================================================
  *  0. DOCKERFILE / ENV SELF-CHECK
@@ -330,19 +331,19 @@ ${text}`;
         try {
           const fake = { key: old.key, message: old.message };
           if (oldMessage?.stickerMessage) {
-            const media = await sock.downloadMediaMessage(fake);
+            const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { sticker: media });
           } else if (oldMessage?.imageMessage) {
-            const media = await sock.downloadMediaMessage(fake);
+            const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { image: media, caption: mediaCaption });
           } else if (oldMessage?.videoMessage) {
-            const media = await sock.downloadMediaMessage(fake);
+            const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { video: media, caption: mediaCaption });
           } else if (oldMessage?.audioMessage) {
-            const media = await sock.downloadMediaMessage(fake);
+            const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { audio: media, mimetype: oldMessage.audioMessage.mimetype || "audio/mpeg", ptt: !!oldMessage.audioMessage.ptt });
           } else if (oldMessage?.documentMessage) {
-            const media = await sock.downloadMediaMessage(fake);
+            const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { document: media, mimetype: oldMessage.documentMessage.mimetype || "application/octet-stream", fileName: oldMessage.documentMessage.fileName || "recovered-file", caption: mediaCaption });
           }
           const linkText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption || "";
@@ -362,6 +363,7 @@ ${text}`;
 async function runAuto(sock, msg, sessionId, toggles) {
   const from = msg.key?.remoteJid;
   if (!from) return;
+  if (from.endsWith("@g.us") && !(await isBotAdmin(sock, from))) return;
   toggles = from.endsWith("@g.us") ? getToggles(from) : getToggles(sessionId);
   if (toggles.autoseen) sock.readMessages([msg.key]).catch(() => {});
   if (toggles.autotyping && !msg.key.fromMe) {
@@ -409,6 +411,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
   const from = msg.key.remoteJid;
   if (!from?.endsWith("@g.us")) return;
   if (msg.key.fromMe) return;
+  if (!(await isBotAdmin(sock, from))) return;
   toggles = getToggles(from);
 
   const antiKeys = ["antilink", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
@@ -481,15 +484,15 @@ async function requireGroupAdmin(sock, from, msg) {
     await sock.sendMessage(from, { text: "❌ Only group admins can use this command." });
     return false;
   }
+  if (!(await isBotAdmin(sock, from))) return false;
+  return true;
+}
+
+async function isBotAdmin(sock, from) {
+  if (!from?.endsWith("@g.us")) return false;
   const phone = sock.user?.id?.split(":")[0];
   const botIds = [sock.user?.id, sock.user?.lid, phone ? `${phone}@s.whatsapp.net` : null].filter(Boolean);
-  const botIsAdmin = (await Promise.all(botIds.map((id) => isUserAdmin(sock, from, id))).catch(() => []))
-    .some(Boolean);
-  if (!botIsAdmin) {
-    await sock.sendMessage(from, { text: "❌ Bot must be a group admin first." });
-    return false;
-  }
-  return true;
+  return (await Promise.all(botIds.map((id) => isUserAdmin(sock, from, id))).catch(() => [])).some(Boolean);
 }
 
 function isController(sock, from, msg, sessionId) {
@@ -501,10 +504,7 @@ function isController(sock, from, msg, sessionId) {
 }
 
 async function requireBotAdminOnly(sock, from) {
-  if (!from?.endsWith("@g.us")) return false;
-  const phone = sock.user?.id?.split(":")[0];
-  const botIds = [sock.user?.id, sock.user?.lid, phone ? `${phone}@s.whatsapp.net` : null].filter(Boolean);
-  const ok = (await Promise.all(botIds.map((id) => isUserAdmin(sock, from, id))).catch(() => [])).some(Boolean);
+  const ok = await isBotAdmin(sock, from);
   if (!ok) await sock.sendMessage(from, { text: "❌ Bot must be a group admin first." });
   return ok;
 }
@@ -527,6 +527,7 @@ async function handleMessage(sock, msg, sessionId) {
     const [cmdName, ...args] = commandText.slice(config.prefix.length).trim().split(/\s+/);
     if (!cmdName) return;
     const normalizedCommand = String(cmdName).trim().toLowerCase();
+    if (from.endsWith("@g.us") && !(await isBotAdmin(sock, from))) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -576,7 +577,7 @@ async function handleMessage(sock, msg, sessionId) {
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       if (!(await requireGroupAdmin(sock, from, msg))) return;
-      const configurable = ANTI_LIST?.includes(normalizedCommand) || AUTO_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "set"].includes(normalizedCommand);
+      const configurable = ANTI_LIST?.includes(normalizedCommand) || AUTO_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "warn", "set"].includes(normalizedCommand);
       if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
         return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
       }
@@ -611,8 +612,12 @@ function unwrapMessage(message) {
 const mk = (n, fn) => register(n, { toggle: null, run: fn });
 
 mk("kick", async ({ sock, from, msg }) => {
-  const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
-  if (t) await sock.groupParticipantsUpdate(from, [t], "remove");
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  const t = ctx?.participant || ctx?.mentionedJid?.[0];
+  if (!t) return sock.sendMessage(from, { text: "❌ Reply to or mention the member you want to kick." });
+  const result = await sock.groupParticipantsUpdate(from, [t], "remove");
+  if (result?.[0]?.status && result[0].status !== "200") throw new Error(`WhatsApp rejected the kick (${result[0].status})`);
+  await sock.sendMessage(from, { text: `✅ @${t.split("@")[0]} was removed from the group.`, mentions: [t] });
 });
 mk("promote", async ({ sock, from, msg }) => {
   const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
@@ -638,7 +643,7 @@ mk("tagall", async ({ sock, from, args }) => {
   const txt = args.join(" ") || "📢 Attention";
   const mentions = md.participants.map((p) => p.id);
   await sock.sendMessage(from, {
-    text: `*${txt}*\n\n${mentions.map((m) => `@${m.split("@")[0]}`).join(" ")}`, mentions,
+    text: `*${txt}*\n\n${mentions.map((m, i) => `${i + 1}. @${m.split("@")[0]}`).join("\n")}`, mentions,
   });
 });
 mk("hidetag", async ({ sock, from, args }) => {
@@ -685,7 +690,8 @@ mk("delgrouppp", async ({ sock, from }) => {
   await sock.sendMessage(from, { text: "🗑️ Group PP deleted" });
 });
 mk("setgrouppp", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  if (!msg.message?.imageMessage) return sock.sendMessage(from, { text: "❌ Reply to an image with .setgrouppp" });
+  const buf = await downloadMedia(sock, msg);
   await sock.updateProfilePicture(from, buf);
   await sock.sendMessage(from, { text: "✅ Group PP updated" });
 });
@@ -852,9 +858,9 @@ register("statuspost", {
       const md = await sock.groupMetadata(from);
       const statusJidList = [from, ...md.participants.map((p) => p.id)];
       await sock.sendMessage("status@broadcast",
-        { text, backgroundColor: "#7c5cff", font: 3 }, { statusJidList });
+        { text, backgroundColor: "#7c5cff", font: 3 }, { statusJidList: [sock.user?.id].filter(Boolean) });
       await sock.sendMessage(from, { text: "✅ Story posted" });
-    } catch { await sock.sendMessage(from, { text: "❌ Failed to post story" }); }
+    } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
   },
 });
 register("gcstatus", { toggle: null, run: async (p) => commands.get("statuspost").run(p) });
@@ -887,10 +893,22 @@ async function downloadWithYtDlp(input, kind) {
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
     const binary = fs.existsSync("/opt/yt-dlp/bin/yt-dlp") ? "/opt/yt-dlp/bin/yt-dlp" : "yt-dlp";
-    const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--extractor-args", "youtube:player_client=tv_embedded,web_safari,android", "--max-filesize", "50M", "-f", format, "-o", output];
-    if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
-    args.push(url);
-    await execFileAsync(binary, args, { timeout: 180000, maxBuffer: 2 * 1024 * 1024 });
+    const clients = ["tv_embedded", "web_safari", "android", "web_creator"];
+    let lastError;
+    for (const client of clients) {
+      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "2", "--fragment-retries", "2", "--retry-sleep", "linear=1::3", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
+      if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
+      args.push(url);
+      try {
+        await execFileAsync(binary, args, { timeout: 150000, maxBuffer: 2 * 1024 * 1024 });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        await fs.promises.rm(output, { force: true }).catch(() => {});
+      }
+    }
+    if (lastError) throw lastError;
     const buffer = await fs.promises.readFile(output);
     if (!buffer.length) throw new Error("Downloaded file is empty");
     return { buffer, title: input, mimetype: kind === "audio" ? "audio/mpeg" : "video/mp4" };
@@ -984,27 +1002,27 @@ mk("instagram", async ({ sock, from, args }) => {
 mk("sticker", async ({ sock, from, msg }) => {
   const media = msg.message?.imageMessage || msg.message?.videoMessage;
   if (!media) return;
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   const webp = await sharp(buf).webp().toBuffer();
   await sock.sendMessage(from, { sticker: webp });
 });
 mk("tosticker", async (p) => commands.get("sticker").run(p));
 mk("togif", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   await sock.sendMessage(from, { video: buf, gifPlayback: true });
 });
 mk("toimg", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   const png = await sharp(buf).png().toBuffer();
   await sock.sendMessage(from, { image: png });
 });
 mk("sticker2img", async (p) => commands.get("toimg").run(p));
 mk("toaudio", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   await sock.sendMessage(from, { audio: buf, mimetype: "audio/mpeg" });
 });
 mk("topdf", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   await sock.sendMessage(from, { document: buf, mimetype: "application/pdf", fileName: "file.pdf" });
 });
 mk("vv", async ({ sock, from, msg }) => {
@@ -1020,7 +1038,7 @@ mk("vv", async ({ sock, from, msg }) => {
   const audio = original.audioMessage;
   if (image || video || audio) {
     const fake = { key: { remoteJid: from, id: `VV-${Date.now()}` }, message: original };
-    const buf = await sock.downloadMediaMessage(fake);
+    const buf = await downloadMedia(sock, fake);
     if (image) return sock.sendMessage(destination, { image: buf, caption: `${emoji} ${image.caption || "View-once recovered"}` });
     if (video) return sock.sendMessage(destination, { video: buf, caption: `${emoji} ${video.caption || "View-once recovered"}` });
     return sock.sendMessage(destination, { audio: buf, mimetype: audio.mimetype || "audio/mpeg", ptt: !!audio.ptt });
@@ -1028,12 +1046,12 @@ mk("vv", async ({ sock, from, msg }) => {
   await sock.sendMessage(destination, { text: `${emoji} View-once message recovered\n${original.conversation || ""}` });
 });
 mk("blur", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   const blurred = await sharp(buf).blur(15).toBuffer();
   await sock.sendMessage(from, { image: blurred });
 });
 mk("crop", async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   const cropped = await sharp(buf).resize(500, 500, { fit: "cover" }).toBuffer();
   await sock.sendMessage(from, { image: cropped });
 });
@@ -1111,7 +1129,10 @@ mk("define", async ({ sock, from, args }) => {
 });
 mk("device", async ({ sock, from }) => sock.sendMessage(from, { text: `📱 Device: Ubuntu + Chrome 20.0.04` }));
 mk("fakeinfo", async ({ sock, from }) => sock.sendMessage(from, { text: `📋 Fake report generated for demo.` }));
-mk("link", async ({ sock, from }) => sock.sendMessage(from, { text: `🔗 ${config.channelLink}` }));
+mk("link", async ({ sock, from }) => {
+  const code = await sock.groupInviteCode(from);
+  await sock.sendMessage(from, { text: `🔗 *${(await sock.groupMetadata(from)).subject}*\nhttps://chat.whatsapp.com/${code}` });
+});
 
 /* ============================================================
  * 16. COMMANDS — AUDIO
@@ -1131,7 +1152,7 @@ mk("volume", async ({ sock, from, args }) => sock.sendMessage(from, { text: `�
  * 17. COMMANDS — FUN / REACTIONS
  * ============================================================ */
 const REACTIONS = {
-  cuddle: "🤗", hug: "🤝", kick: "🦵", kiss: "💋", pat: "🫳",
+  cuddle: "🤗", hug: "🤝", kiss: "💋", pat: "🫳",
   poke: "👉", slap: "👋", kill: "💀", shoot: "🔫", smile: "😊",
   wink: "😉", danger: "⚠️", shy: "😳",
 };
@@ -1148,6 +1169,15 @@ mk("reactionmenu", async ({ sock, from }) => {
   const list = Object.entries(REACTIONS).map(([n, e]) => `${e} .${n}`).join("\n");
   await sock.sendMessage(from, { text: `🎭 *Reaction Menu*\n\n${list}` });
 });
+mk("joke", async ({ sock, from }) => sock.sendMessage(from, { text: "😂 *Joke*\nProgrammer ne chai kyun banayi?\nBecause uska code brew ho raha tha!" }));
+mk("quote", async ({ sock, from }) => sock.sendMessage(from, { text: "💬 *Quote*\nSuccess is the sum of small efforts, repeated every day." }));
+mk("truth", async ({ sock, from }) => sock.sendMessage(from, { text: "🎯 *Truth*\nAapka sabse bada goal kya hai?" }));
+mk("dare", async ({ sock, from }) => sock.sendMessage(from, { text: "🔥 *Dare*\nGroup mein ek funny voice note bhejo." }));
+mk("diceroll", async ({ sock, from }) => sock.sendMessage(from, { text: `🎲 You rolled: *${1 + Math.floor(Math.random() * 6)}*` }));
+mk("coin", async ({ sock, from }) => sock.sendMessage(from, { text: `🪙 Coin: *${Math.random() < 0.5 ? "Heads" : "Tails"}*` }));
+mk("8ball", async ({ sock, from }) => sock.sendMessage(from, { text: `🎱 ${["Yes", "No", "Maybe", "Ask again later"][Math.floor(Math.random() * 4)]}` }));
+mk("meme", async ({ sock, from }) => sock.sendMessage(from, { text: "🤣 Meme mode: Jab bot online ho, group ka mood automatically upgrade ho jata hai!" }));
+mk("fun", async ({ sock, from }) => sock.sendMessage(from, { text: "🎮 *FUN MENU*\n.joke\n.quote\n.truth\n.dare\n.diceroll\n.coin\n.8ball\n.meme" }));
 
 /* ============================================================
  * 18. COMMANDS — OWNER
@@ -1226,8 +1256,9 @@ register("warn", {
   toggle: null,
   run: async ({ sock, from, msg, args }) => {
     if (!(await requireGroupAdmin(sock, from, msg))) return;
-    const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
-    if (!target) return sock.sendMessage(from, { text: "❌ Reply to the member's message with .warn" });
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    const target = ctx?.participant || ctx?.mentionedJid?.[0] || (args[0] ? `${args[0].replace(/\D/g, "")}@s.whatsapp.net` : null);
+    if (!target) return sock.sendMessage(from, { text: "❌ Reply to or mention the member with .warn" });
     const key = `${from}:${target}`;
     const limit = Math.max(1, Number(args[0]) || 3);
     const count = (warningState.get(key) || 0) + 1;
@@ -1262,7 +1293,7 @@ register("getdp", { toggle: null, run: async ({ sock, from, msg }) => {
   try {
     const url = await sock.profilePictureUrl(t, "image");
     await sock.sendMessage(from, { image: { url }, caption: `📷 @${t.split("@")[0]}`, mentions: [t] });
-  } catch { await sock.sendMessage(from, { text: "❌ No DP" }); }
+  } catch { await sock.sendMessage(from, { text: t === from ? "❌ This group has no profile picture." : "❌ This user has no profile picture." }); }
 }});
 register("dp", { toggle: null, run: async (p) => commands.get("getdp").run(p) });
 register("getid", { toggle: null, run: async ({ sock, from, msg }) => {
@@ -1329,11 +1360,11 @@ register("menu", {
 });
 register("help", { toggle: null, run: async (p) => commands.get("menu").run(p) });
 register("addmenuimage", { toggle: null, run: async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   await sock.sendMessage(from, { image: buf, caption: `✅ Menu image set` });
 }});
 register("addmenuvideo", { toggle: null, run: async ({ sock, from, msg }) => {
-  const buf = await sock.downloadMediaMessage(msg);
+  const buf = await downloadMedia(sock, msg);
   await sock.sendMessage(from, { video: buf, caption: `✅ Menu video set` });
 }});
 register("delmenuimage", { toggle: null, run: async ({ sock, from }) => sock.sendMessage(from, { text: "🗑️ Menu image removed" }) });

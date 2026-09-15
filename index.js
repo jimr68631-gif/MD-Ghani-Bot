@@ -143,16 +143,41 @@ const isOn = (id, key) => !!getToggles(id)[key];
 const commands = new Map();
 const register = (name, opts) => commands.set(name.toLowerCase(), opts);
 const sessions = new Map();
+let baileysVersionPromise;
+
+function getBaileysVersion() {
+  if (!baileysVersionPromise) {
+    baileysVersionPromise = fetchLatestBaileysVersion()
+      .then(({ version }) => version)
+      .catch((error) => {
+        baileysVersionPromise = undefined;
+        throw error;
+      });
+  }
+  return baileysVersionPromise;
+}
 
 /* ============================================================
  *  5. START SESSION
  * ============================================================ */
 async function startSession(sessionId, phoneNumber) {
+  const existing = sessions.get(sessionId);
+  if (existing?.starting) return { ok: true, code: null };
+  if (existing?.sock) return { ok: true, code: null };
+  sessions.set(sessionId, { starting: true, reconnectTimer: null });
   const dir = `${config.sessionDir}/${sessionId}`;
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  const { state, saveCreds } = await useMultiFileAuthState(dir);
-  const { version } = await fetchLatestBaileysVersion();
+  let state;
+  let saveCreds;
+  let version;
+  try {
+    ({ state, saveCreds } = await useMultiFileAuthState(dir));
+    version = await getBaileysVersion();
+  } catch (error) {
+    sessions.delete(sessionId);
+    throw error;
+  }
 
   const sock = makeWASocket({
     version,
@@ -169,7 +194,7 @@ async function startSession(sessionId, phoneNumber) {
     getMessage: async () => undefined,
   });
 
-  sessions.set(sessionId, { sock, info: { phoneNumber }, wired: false });
+  sessions.set(sessionId, { sock, info: { phoneNumber }, wired: false, starting: false, reconnectTimer: null });
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", (u) => {
@@ -188,8 +213,16 @@ async function startSession(sessionId, phoneNumber) {
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut) {
         log.warn(`♻️ Reconnecting ${sessionId}...`);
-        setTimeout(() => startSession(sessionId, phoneNumber), 2000);
+        const current = sessions.get(sessionId);
+        if (current && !current.reconnectTimer) {
+          current.reconnectTimer = setTimeout(() => {
+            current.reconnectTimer = null;
+            if (sessions.get(sessionId)?.sock === sock) sessions.delete(sessionId);
+            startSession(sessionId, phoneNumber).catch((e) => log.error(`reconnect ${sessionId}: ${e?.message || e}`));
+          }, 5000);
+        }
       } else {
+        if (sessions.get(sessionId)?.reconnectTimer) clearTimeout(sessions.get(sessionId).reconnectTimer);
         log.error(`🚫 ${sessionId} logged out`);
         sessions.delete(sessionId);
         toggleState.delete(sessionId);
@@ -240,7 +273,8 @@ function wireHandlers(sessionId) {
  *  7. AUTO FEATURES
  * ============================================================ */
 async function runAuto(sock, msg, sessionId, toggles) {
-  const from = msg.key.remoteJid;
+  const from = msg.key?.remoteJid;
+  if (!from) return;
   if (toggles.autoseen) sock.readMessages([msg.key]).catch(() => {});
   if (toggles.autotyping && !msg.key.fromMe) {
     sock.sendPresenceUpdate("composing", from).catch(() => {});
@@ -275,9 +309,13 @@ async function runAnti(sock, msg, sessionId, toggles) {
   if (!from?.endsWith("@g.us")) return;
   if (msg.key.fromMe) return;
 
+  const antiKeys = ["antilink", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
+  if (!antiKeys.some((key) => toggles[key])) return;
+
   const sender = msg.key.participant || from;
-  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text ||
-    msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || "";
+  const message = unwrapMessage(msg.message);
+  const text = message?.conversation || message?.extendedTextMessage?.text ||
+    message?.imageMessage?.caption || message?.videoMessage?.caption || "";
 
   const isAdmin = await isUserAdmin(sock, from, sender);
   if (isAdmin) return;
@@ -954,9 +992,11 @@ app.use(express.json());
 app.get("/", (req, res) => res.type("html").send(PAIR_HTML));
 
 app.post("/pair", async (req, res) => {
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ ok: false, error: "phone required" });
-  const sessionId = phone.replace(/\D/g, "");
+  const { phone } = req.body || {};
+  const sessionId = String(phone || "").replace(/\D/g, "");
+  if (sessionId.length < 10 || sessionId.length > 15) {
+    return res.status(400).json({ ok: false, error: "Valid phone number with country code required" });
+  }
   pair.got(sessionId);
   try {
     const out = await startSession(sessionId, sessionId);
@@ -965,6 +1005,7 @@ app.post("/pair", async (req, res) => {
     pair.fail(out.error);
     res.status(500).json({ ok: false, error: out.error });
   } catch (e) {
+    sessions.delete(sessionId);
     pair.fail(e); pair.err(e);
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1004,5 +1045,16 @@ setInterval(() => {
  * ============================================================ */
 process.on("uncaughtException", (e) => log.error(e));
 process.on("unhandledRejection", (e) => log.error(e));
+
+async function shutdown(signal) {
+  log.info(`🛑 ${signal} received; closing sessions...`);
+  for (const [sessionId, session] of sessions) {
+    if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
+    try { session.sock?.end?.(new Error(`Process ${signal}`)); } catch (e) { log.error(`shutdown ${sessionId}: ${e?.message || e}`); }
+  }
+  setTimeout(() => process.exit(0), 1000).unref();
+}
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
 
 log.info(`🚀 ${config.botName} started — ${commands.size} commands — ${sessions.size} session(s)`);

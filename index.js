@@ -160,11 +160,15 @@ let baileysVersionPromise;
 
 function getBaileysVersion() {
   if (!baileysVersionPromise) {
-    baileysVersionPromise = fetchLatestBaileysVersion()
-      .then(({ version }) => version)
+    const fallbackVersion = [2, 3000, 1015901307];
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(fallbackVersion), 2500));
+    baileysVersionPromise = Promise.race([
+      fetchLatestBaileysVersion().then(({ version }) => version),
+      timeout,
+    ])
       .catch((error) => {
-        baileysVersionPromise = undefined;
-        throw error;
+        log.warn(`Baileys version lookup failed; using fallback: ${error?.message || error}`);
+        return fallbackVersion;
       });
   }
   return baileysVersionPromise;
@@ -205,7 +209,10 @@ async function startSession(sessionId, phoneNumber) {
     syncFullHistory: false,
     generateHighQualityLinkPreview: true,
     defaultQueryTimeoutMs: undefined,
-    getMessage: async () => undefined,
+    getMessage: async (key) => {
+      const cached = deletedMessageCache.get(`${key?.remoteJid}:${key?.id}`);
+      return cached?.message;
+    },
   });
 
   sessions.set(sessionId, { sock, info: { phoneNumber }, wired: false, starting: false, reconnectTimer: null });

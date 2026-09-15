@@ -108,6 +108,7 @@ const defaultToggles = {
   autorecording: false, autorecordtyping: false, autosavestatus: false,
   autotyping: false, autoviewstatus: false,
   alwaysonline: true,
+  antilinkAction: "delete",
 };
 
 /* ============================================================
@@ -307,6 +308,7 @@ async function runAuto(sock, msg, sessionId, toggles) {
  * ============================================================ */
 const LINK_RE = /(https?:\/\/|wa\.me\/|chat\.whatsapp\.com\/|t\.me\/)/i;
 const BAD_WORDS = ["madarchod","bhenchod","bhosdi","gandu","chutiya","randi","loda","lund"];
+const antilinkActionState = new Map();
 
 async function runAnti(sock, msg, sessionId, toggles) {
   const from = msg.key.remoteJid;
@@ -352,18 +354,41 @@ async function takeAction(sock, group, user, msg, key) {
   try {
     await sock.sendMessage(group, { delete: msg.key }).catch(() => {});
     await sock.sendMessage(group, {
-      text: `⚠️ @${user.split("@")[0]} — *${key.toUpperCase()}* violation!`,
+      text: `⚠️ @${user.split("@")[0]} — message deleted because *${key.toUpperCase()}* is not allowed.${antilinkActionState.get(group) === "kick" && key === "antilink" ? " User removed from group." : ""}`,
       mentions: [user],
     });
-    await sock.groupParticipantsUpdate(group, [user], "remove").catch(() => {});
+    if (key === "antilink" && antilinkActionState.get(group) === "kick") {
+      await sock.groupParticipantsUpdate(group, [user], "remove").catch(() => {});
+    }
   } catch (e) { log.error("anti: " + e.message); }
 }
 
+const groupMetadataCache = new Map();
 async function isUserAdmin(sock, group, user) {
   try {
-    const md = await sock.groupMetadata(group);
+    const cached = groupMetadataCache.get(group);
+    const md = cached && cached.expires > Date.now() ? cached.data : await sock.groupMetadata(group);
+    groupMetadataCache.set(group, { data: md, expires: Date.now() + 30000 });
     return md.participants.find((p) => p.id === user)?.admin != null;
   } catch { return false; }
+}
+
+async function requireGroupAdmin(sock, from, msg) {
+  if (!from?.endsWith("@g.us")) {
+    await sock.sendMessage(from, { text: "❌ This command works only in groups." });
+    return false;
+  }
+  const sender = msg?.key?.participant || from;
+  if (!(await isUserAdmin(sock, from, sender))) {
+    await sock.sendMessage(from, { text: "❌ Only group admins can use this command." });
+    return false;
+  }
+  const botId = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
+  if (!(await isUserAdmin(sock, from, botId))) {
+    await sock.sendMessage(from, { text: "❌ Bot must be a group admin first." });
+    return false;
+  }
+  return true;
 }
 
 /* ============================================================
@@ -469,8 +494,16 @@ mk("tagme", async ({ sock, from }) => {
   await sock.sendMessage(from, { text: `@${from.split("@")[0]}`, mentions: [from] });
 });
 mk("mention", async (p) => commands.get("tagall").run(p));
-mk("open", async ({ sock, from }) => sock.groupSettingUpdate(from, "not_announcement"));
-mk("close", async ({ sock, from }) => sock.groupSettingUpdate(from, "announcement"));
+mk("open", async ({ sock, from, msg }) => {
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  await sock.groupSettingUpdate(from, "not_announcement");
+  await sock.sendMessage(from, { text: "✅ Group opened. All members can send messages now." });
+});
+mk("close", async ({ sock, from, msg }) => {
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  await sock.groupSettingUpdate(from, "announcement");
+  await sock.sendMessage(from, { text: "✅ Group closed. Only admins can send messages now." });
+});
 mk("groupinfo", async ({ sock, from }) => {
   const md = await sock.groupMetadata(from);
   const admins = md.participants.filter((p) => p.admin).map((p) => `@${p.id.split("@")[0]}`).join(", ");
@@ -528,6 +561,28 @@ for (const name of ANTI_LIST) {
     },
   });
 }
+register("antilink", {
+  toggle: null,
+  run: async ({ sock, from, msg, args, sessionId }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const mode = String(args[0] || "").toLowerCase();
+    if (!mode) {
+      const enabled = getToggles(sessionId).antilink;
+      const action = antilinkActionState.get(from) || "delete";
+      return sock.sendMessage(from, { text: `🔗 Antilink: ${enabled ? "ON ✅" : "OFF ❌"}\nAction: ${action}\nUse: .antilink on | off | kick | delete` });
+    }
+    if (mode === "kick" || mode === "delete") {
+      antilinkActionState.set(from, mode);
+      setToggle(sessionId, "antilink", true);
+      return sock.sendMessage(from, { text: `✅ Antilink ON\nAction: ${mode}\nLinks will be deleted immediately${mode === "kick" ? " and the sender will be removed." : "."}` });
+    }
+    if (mode === "on" || mode === "off") {
+      setToggle(sessionId, "antilink", mode);
+      return sock.sendMessage(from, { text: `✅ Antilink ${mode.toUpperCase()}` });
+    }
+    await sock.sendMessage(from, { text: "Usage: .antilink on | off | kick | delete" });
+  },
+});
 register("autostatuslinkkick", {
   toggle: null,
   run: async ({ sock, from, args, sessionId }) => {
@@ -587,30 +642,56 @@ async function resolveYouTube(input) {
   if (!first?.url) throw new Error("YouTube video not found");
   return first.url;
 }
+async function legacyYouTube(input, kind) {
+  const isUrl = ytdl.validateURL(input);
+  const url = isUrl ? input : (await axios.get("https://api.akuari.my.id/search/youtube", { params: { query: input }, timeout: 20000 })).data?.result?.[0]?.url;
+  if (!url) throw new Error("Video not found");
+  const data = (await axios.get("https://api.akuari.my.id/downloader/youtube", { params: { link: url }, timeout: 30000 })).data?.result;
+  const mediaUrl = kind === "audio" ? data?.mp3 : data?.video;
+  if (!mediaUrl) throw new Error("Fallback media provider returned no file");
+  return { mediaUrl, title: input };
+}
 mk("ytmp4", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
-  const url = await resolveYouTube(args.join(" "));
-  const info = await ytdl.getInfo(url);
-  const format = ytdl.chooseFormat(info.formats, { quality: "18", filter: "audioandvideo" });
-  if (!format?.url) throw new Error("Video format unavailable");
-  await sock.sendMessage(from, { video: { url: format.url }, caption: `🎬 ${info.videoDetails.title}` });
+  const input = args.join(" ");
+  try {
+    const url = await resolveYouTube(input);
+    const info = await ytdl.getInfo(url);
+    const format = ytdl.chooseFormat(info.formats, { quality: "18", filter: "audioandvideo" });
+    if (!format?.url) throw new Error("Video format unavailable");
+    await sock.sendMessage(from, { video: { url: format.url }, caption: `🎬 ${info.videoDetails.title}` });
+  } catch (primary) {
+    try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}` }); }
+    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
+  }
 });
 mk("ytmp3", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp3 <YouTube URL>" });
-  const url = await resolveYouTube(args.join(" "));
-  const info = await ytdl.getInfo(url);
-  const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
-  if (!format?.url) throw new Error("Audio format unavailable");
-  await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
+  const input = args.join(" ");
+  try {
+    const url = await resolveYouTube(input);
+    const info = await ytdl.getInfo(url);
+    const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
+    if (!format?.url) throw new Error("Audio format unavailable");
+    await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
+  } catch {
+    try { const f = await legacyYouTube(input, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
+    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
+  }
 });
 mk("song", async ({ sock, from, args }) => {
   const q = args.join(" ");
   if (!q) return sock.sendMessage(from, { text: "Usage: .song <song name>" });
-  const url = await resolveYouTube(q);
-  const info = await ytdl.getInfo(url);
-  const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
-  if (!format?.url) throw new Error("Audio format unavailable");
-  await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
+  try {
+    const url = await resolveYouTube(q);
+    const info = await ytdl.getInfo(url);
+    const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
+    if (!format?.url) throw new Error("Audio format unavailable");
+    await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
+  } catch {
+    try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
+    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
+  }
 });
 mk("song2", async (p) => commands.get("song").run(p));
 mk("play", async (p) => commands.get("song").run(p));
@@ -680,10 +761,20 @@ mk("topdf", async ({ sock, from, msg }) => {
 });
 mk("vv", async ({ sock, from, msg }) => {
   const ctx = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  if (!ctx) return;
-  const viewOnce = ctx.viewOnceMessageV2 || ctx.viewOnceMessage;
-  if (!viewOnce) return;
-  await sock.sendMessage(from, viewOnce.message);
+  const viewOnce = ctx?.viewOnceMessageV2 || ctx?.viewOnceMessage || ctx?.viewOnceMessageV2Extension;
+  const original = viewOnce?.message || viewOnce;
+  if (!original) return sock.sendMessage(from, { text: "❌ Reply to a view-once message with .vv" });
+  const image = original.imageMessage;
+  const video = original.videoMessage;
+  const audio = original.audioMessage;
+  if (image || video || audio) {
+    const fake = { key: { remoteJid: from, id: `VV-${Date.now()}` }, message: original };
+    const buf = await sock.downloadMediaMessage(fake);
+    if (image) return sock.sendMessage(from, { image: buf, caption: image.caption || "👁️ View-once recovered" });
+    if (video) return sock.sendMessage(from, { video: buf, caption: video.caption || "👁️ View-once recovered" });
+    return sock.sendMessage(from, { audio: buf, mimetype: audio.mimetype || "audio/mpeg", ptt: !!audio.ptt });
+  }
+  await sock.sendMessage(from, original);
 });
 mk("blur", async ({ sock, from, msg }) => {
   const buf = await sock.downloadMediaMessage(msg);
@@ -701,8 +792,13 @@ mk("setfont", async ({ sock, from, args }) => {
 });
 mk("tts", async ({ sock, from, args }) => {
   const text = args.join(" ");
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
-  await sock.sendMessage(from, { audio: { url }, mimetype: "audio/mpeg" });
+  if (!text) return sock.sendMessage(from, { text: "Usage: .tts <text>" });
+  const { data } = await axios.get("https://api.streamelements.com/kappa/v2/speech", {
+    params: { voice: "Brian", text: text.slice(0, 450) },
+    responseType: "arraybuffer",
+    timeout: 20000,
+  });
+  await sock.sendMessage(from, { audio: Buffer.from(data), mimetype: "audio/mpeg", ptt: false });
 });
 
 /* ============================================================
@@ -738,9 +834,17 @@ mk("ipinfo", async ({ sock, from, args }) => {
 });
 mk("weather", async ({ sock, from, args }) => {
   const q = args.join(" ");
-  const { data } = await axios.get(`https://wttr.in/${encodeURIComponent(q)}?format=j1`);
-  const c = data.current_condition[0];
-  await sock.sendMessage(from, { text: `🌤️ *${q}*\nTemp: ${c.temp_C}°C\nHumidity: ${c.humidity}%\nWind: ${c.windspeedKmph}km/h` });
+  if (!q) return sock.sendMessage(from, { text: "Usage: .weather <city>" });
+  const geo = await axios.get("https://geocoding-api.open-meteo.com/v1/search", {
+    params: { name: q, count: 1, language: "en", format: "json" }, timeout: 15000,
+  });
+  const place = geo.data?.results?.[0];
+  if (!place) return sock.sendMessage(from, { text: `❌ Location not found: ${q}` });
+  const forecast = await axios.get("https://api.open-meteo.com/v1/forecast", {
+    params: { latitude: place.latitude, longitude: place.longitude, current: "temperature_2m,relative_humidity_2m,wind_speed_10m", timezone: "auto" }, timeout: 15000,
+  });
+  const c = forecast.data.current;
+  await sock.sendMessage(from, { text: `🌤️ *${place.name}, ${place.country}*\n🌡️ Temp: ${c.temperature_2m}°C\n💧 Humidity: ${c.relative_humidity_2m}%\n💨 Wind: ${c.wind_speed_10m} km/h` });
 });
 mk("cityinfo", async (p) => commands.get("weather").run(p));
 mk("news", async ({ sock, from }) => sock.sendMessage(from, { text: "📰 News feature active" }));

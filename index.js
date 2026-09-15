@@ -140,8 +140,8 @@ const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
     groupMessageSettings.set(group, {
-      welcome: "🎉 Welcome to {group}, {user}! You are member #{count}.",
-      goodbye: "👋 Goodbye from {group}, {user}. You were member #{count}.",
+      welcome: "🎉 Welcome {user} to {group}. You are member #{count}.",
+      goodbye: "👋 Goodbye {user} from {group}. You are member #{count}.",
       welcomeEnabled: true,
       goodbyeEnabled: true,
     });
@@ -1315,13 +1315,15 @@ register("warn", {
  * ============================================================ */
 register("setwelcome", { toggle: null, run: async ({ sock, from, args }) => {
   const settings = getGroupMessageSettings(from);
-  settings.welcome = args.join(" ") || "🎉 Welcome to {group}, {user}! You are member #{count}.";
-  await sock.sendMessage(from, { text: `✅ Welcome message set:\n${settings.welcome}\n\nUse: {group} {user} {count}` });
+  const message = args.join(" ") || "🎉 Welcome";
+  settings.welcome = `${message} {user} to {group}. You are member #{count}.`;
+  await sock.sendMessage(from, { text: `✅ Welcome message set:\n${settings.welcome}\n\nOrder: message → user → group name → You are member #count` });
 }});
 register("setgoodbye", { toggle: null, run: async ({ sock, from, args }) => {
   const settings = getGroupMessageSettings(from);
-  settings.goodbye = args.join(" ") || "👋 Goodbye from {group}, {user}. You were member #{count}.";
-  await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nUse: {group} {user} {count}` });
+  const message = args.join(" ") || "👋 Goodbye";
+  settings.goodbye = `${message} {user} from {group}. You are member #{count}.`;
+  await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nOrder: message → user → group name → You are member #count` });
 }});
 register("welcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });

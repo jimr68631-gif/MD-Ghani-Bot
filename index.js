@@ -853,18 +853,24 @@ register("menu", {
 ┃ 🟢 Status: *ONLINE*
 ╰━━━━━━━━━━━━━━━━╯\n\n`;
     const footer = `\n\n> ✨ Type *${config.prefix}help* for this menu\n> ⚡ Fast • Secure • Reliable`;
-    await sock.sendMessage(from, {
-      text: header + sections.join("\n\n") + footer,
-      contextInfo: {
-        forwardingScore: 999,
-        isForwarded: true,
-        forwardedNewsletterMessageInfo: {
-          newsletterJid: config.channelJid,
-          newsletterName: config.botName,
-          serverMessageId: -1,
-        },
+    const menuText = header + sections.join("\n\n") + footer;
+    const contextInfo = {
+      forwardingScore: 999,
+      isForwarded: true,
+      forwardedNewsletterMessageInfo: {
+        newsletterJid: config.channelJid,
+        newsletterName: config.botName,
+        serverMessageId: -1,
       },
-    });
+    };
+    try {
+      await sock.sendMessage(from, { text: menuText, contextInfo });
+    } catch (e) {
+      log.error(`menu context send failed: ${e?.message || e}`);
+      // Some WhatsApp clients reject forwarded metadata; always keep the menu usable.
+      const safeParts = menuText.match(/[\s\S]{1,3500}/g) || [menuText];
+      for (const part of safeParts) await sock.sendMessage(from, { text: part });
+    }
   },
 });
 register("help", { toggle: null, run: async (p) => commands.get("menu").run(p) });

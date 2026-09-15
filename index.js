@@ -14,6 +14,8 @@ import os from "os";
 import axios from "axios";
 import pino from "pino";
 import sharp from "sharp";
+import ytSearch from "yt-search";
+import ytdl from "@distube/ytdl-core";
 import { fileURLToPath } from "url";
 import {
   makeWASocket,
@@ -143,6 +145,7 @@ const isOn = (id, key) => !!getToggles(id)[key];
 const commands = new Map();
 const register = (name, opts) => commands.set(String(name).trim().toLowerCase(), opts);
 const sessions = new Map();
+let shuttingDown = false;
 let baileysVersionPromise;
 
 function getBaileysVersion() {
@@ -161,6 +164,7 @@ function getBaileysVersion() {
  *  5. START SESSION
  * ============================================================ */
 async function startSession(sessionId, phoneNumber) {
+  if (shuttingDown) return { ok: false, error: "Bot is shutting down" };
   const existing = sessions.get(sessionId);
   if (existing?.starting) return { ok: true, code: null };
   if (existing?.sock) return { ok: true, code: null };
@@ -211,7 +215,7 @@ async function startSession(sessionId, phoneNumber) {
     }
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) {
+      if (code !== DisconnectReason.loggedOut && !shuttingDown) {
         log.warn(`♻️ Reconnecting ${sessionId}...`);
         const current = sessions.get(sessionId);
         if (current && !current.reconnectTimer) {
@@ -576,24 +580,37 @@ register("statuslink", {
 /* ============================================================
  * 13. COMMANDS — DOWNLOAD
  * ============================================================ */
+async function resolveYouTube(input) {
+  if (ytdl.validateURL(input)) return input;
+  const result = await ytSearch(input);
+  const first = result.videos?.[0];
+  if (!first?.url) throw new Error("YouTube video not found");
+  return first.url;
+}
 mk("ytmp4", async ({ sock, from, args }) => {
-  if (!args[0]) return;
-  const { data } = await axios.get(`https://api.akuari.my.id/downloader/youtube?link=${args[0]}`);
-  await sock.sendMessage(from, { video: { url: data?.result?.video }, caption: "🎬 MD-Ghani-Bot" });
+  if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
+  const url = await resolveYouTube(args.join(" "));
+  const info = await ytdl.getInfo(url);
+  const format = ytdl.chooseFormat(info.formats, { quality: "18", filter: "audioandvideo" });
+  if (!format?.url) throw new Error("Video format unavailable");
+  await sock.sendMessage(from, { video: { url: format.url }, caption: `🎬 ${info.videoDetails.title}` });
 });
 mk("ytmp3", async ({ sock, from, args }) => {
-  if (!args[0]) return;
-  const { data } = await axios.get(`https://api.akuari.my.id/downloader/youtube?link=${args[0]}`);
-  await sock.sendMessage(from, { audio: { url: data?.result?.mp3 }, mimetype: "audio/mpeg" });
+  if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp3 <YouTube URL>" });
+  const url = await resolveYouTube(args.join(" "));
+  const info = await ytdl.getInfo(url);
+  const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
+  if (!format?.url) throw new Error("Audio format unavailable");
+  await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
 });
 mk("song", async ({ sock, from, args }) => {
   const q = args.join(" ");
-  if (!q) return;
-  const { data } = await axios.get(`https://api.akuari.my.id/search/youtube?query=${encodeURIComponent(q)}`);
-  const vid = data?.result?.[0]?.url;
-  if (!vid) return;
-  const { data: dl } = await axios.get(`https://api.akuari.my.id/downloader/youtube?link=${vid}`);
-  await sock.sendMessage(from, { audio: { url: dl.result.mp3 }, mimetype: "audio/mpeg" });
+  if (!q) return sock.sendMessage(from, { text: "Usage: .song <song name>" });
+  const url = await resolveYouTube(q);
+  const info = await ytdl.getInfo(url);
+  const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
+  if (!format?.url) throw new Error("Audio format unavailable");
+  await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
 });
 mk("song2", async (p) => commands.get("song").run(p));
 mk("play", async (p) => commands.get("song").run(p));
@@ -917,9 +934,21 @@ register("menu", {
 ╰━━━━━━━━━━━━━━━━╯\n\n`;
     const footer = `\n\n> ✨ Type *${config.prefix}help* for this menu\n> ⚡ Fast • Secure • Reliable`;
     const menuText = header + sections.join("\n\n") + footer;
-    const safeParts = menuText.match(/[\s\S]{1,3500}/g) || [menuText];
-    for (const part of safeParts) {
-      await sock.sendMessage(from, { text: part });
+    const contextInfo = {
+      forwardingScore: 999,
+      isForwarded: true,
+      forwardedNewsletterMessageInfo: {
+        newsletterJid: config.channelJid,
+        newsletterName: config.botName,
+        serverMessageId: -1,
+      },
+    };
+    try {
+      await sock.sendMessage(from, { text: menuText, contextInfo });
+    } catch (e) {
+      log.error(`menu button fallback: ${e?.message || e}`);
+      const safeParts = menuText.match(/[\s\S]{1,3500}/g) || [menuText];
+      for (const part of safeParts) await sock.sendMessage(from, { text: part });
     }
   },
 });
@@ -1064,6 +1093,8 @@ process.on("uncaughtException", (e) => log.error(e));
 process.on("unhandledRejection", (e) => log.error(e));
 
 async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info(`🛑 ${signal} received; closing sessions...`);
   for (const [sessionId, session] of sessions) {
     if (session.reconnectTimer) clearTimeout(session.reconnectTimer);

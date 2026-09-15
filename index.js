@@ -341,10 +341,10 @@ function wireHandlers(sessionId) {
         const deletedBy = item.key.participant || item.key.remoteJid || "Unknown";
         const clean = (jid) => String(jid).split("@")[0].split(":")[0];
         const isGroup = source.endsWith("@g.us");
-        let sourceName = isGroup ? "WhatsApp Group" : "Private Chat";
-        if (isGroup) {
-          try { sourceName = (await sock.groupMetadata(source)).subject || sourceName; } catch {}
-        }
+        const cachedGroup = isGroup ? groupMetadataCache.get(source) : null;
+        const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
+          ? cachedGroup.data.subject
+          : (isGroup ? "WhatsApp Group" : "Private Chat");
         const type = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
           oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
           oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document" : "Media/Other";

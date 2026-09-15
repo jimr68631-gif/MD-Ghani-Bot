@@ -11,6 +11,8 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import axios from "axios";
 import pino from "pino";
 import sharp from "sharp";
@@ -26,6 +28,7 @@ import {
 } from "@whiskeysockets/baileys";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const execFileAsync = promisify(execFile);
 
 /* ============================================================
  *  0. DOCKERFILE / ENV SELF-CHECK
@@ -642,6 +645,25 @@ async function resolveYouTube(input) {
   if (!first?.url) throw new Error("YouTube video not found");
   return first.url;
 }
+async function downloadWithYtDlp(input, kind) {
+  const url = await resolveYouTube(input);
+  const ext = kind === "audio" ? "mp3" : "mp4";
+  const base = path.join(os.tmpdir(), `md-ghani-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const output = `${base}.${ext}`;
+  try {
+    const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
+    const args = ["--no-playlist", "--no-warnings", "--max-filesize", "50M", "-f", format, "-o", output];
+    if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
+    args.push(url);
+    await execFileAsync("yt-dlp", args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024 });
+    const buffer = await fs.promises.readFile(output);
+    if (!buffer.length) throw new Error("Downloaded file is empty");
+    return { buffer, title: input, mimetype: kind === "audio" ? "audio/mpeg" : "video/mp4" };
+  } finally {
+    await fs.promises.rm(output, { force: true }).catch(() => {});
+    await fs.promises.rm(`${base}.part`, { force: true }).catch(() => {});
+  }
+}
 async function legacyYouTube(input, kind) {
   const isUrl = ytdl.validateURL(input);
   const url = isUrl ? input : (await axios.get("https://api.akuari.my.id/search/youtube", { params: { query: input }, timeout: 20000 })).data?.result?.[0]?.url;
@@ -655,11 +677,8 @@ mk("ytmp4", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
   const input = args.join(" ");
   try {
-    const url = await resolveYouTube(input);
-    const info = await ytdl.getInfo(url);
-    const format = ytdl.chooseFormat(info.formats, { quality: "18", filter: "audioandvideo" });
-    if (!format?.url) throw new Error("Video format unavailable");
-    await sock.sendMessage(from, { video: { url: format.url }, caption: `🎬 ${info.videoDetails.title}` });
+    const media = await downloadWithYtDlp(input, "video");
+    await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title}` });
   } catch (primary) {
     try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}` }); }
     catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
@@ -669,11 +688,8 @@ mk("ytmp3", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp3 <YouTube URL>" });
   const input = args.join(" ");
   try {
-    const url = await resolveYouTube(input);
-    const info = await ytdl.getInfo(url);
-    const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
-    if (!format?.url) throw new Error("Audio format unavailable");
-    await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
+    const media = await downloadWithYtDlp(input, "audio");
+    await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
   } catch {
     try { const f = await legacyYouTube(input, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
     catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
@@ -683,11 +699,8 @@ mk("song", async ({ sock, from, args }) => {
   const q = args.join(" ");
   if (!q) return sock.sendMessage(from, { text: "Usage: .song <song name>" });
   try {
-    const url = await resolveYouTube(q);
-    const info = await ytdl.getInfo(url);
-    const format = ytdl.chooseFormat(info.formats, { quality: "highestaudio", filter: "audioonly" });
-    if (!format?.url) throw new Error("Audio format unavailable");
-    await sock.sendMessage(from, { audio: { url: format.url }, mimetype: "audio/mpeg", ptt: false });
+    const media = await downloadWithYtDlp(q, "audio");
+    await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
   } catch {
     try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
     catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
@@ -764,17 +777,20 @@ mk("vv", async ({ sock, from, msg }) => {
   const viewOnce = ctx?.viewOnceMessageV2 || ctx?.viewOnceMessage || ctx?.viewOnceMessageV2Extension;
   const original = viewOnce?.message || viewOnce;
   if (!original) return sock.sendMessage(from, { text: "❌ Reply to a view-once message with .vv" });
+  const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
+  const destination = botInbox || from;
+  const emoji = ["👀", "🔥", "😂", "😍", "😮", "❤️", "✨", "🤯"][Math.floor(Math.random() * 8)];
   const image = original.imageMessage;
   const video = original.videoMessage;
   const audio = original.audioMessage;
   if (image || video || audio) {
     const fake = { key: { remoteJid: from, id: `VV-${Date.now()}` }, message: original };
     const buf = await sock.downloadMediaMessage(fake);
-    if (image) return sock.sendMessage(from, { image: buf, caption: image.caption || "👁️ View-once recovered" });
-    if (video) return sock.sendMessage(from, { video: buf, caption: video.caption || "👁️ View-once recovered" });
-    return sock.sendMessage(from, { audio: buf, mimetype: audio.mimetype || "audio/mpeg", ptt: !!audio.ptt });
+    if (image) return sock.sendMessage(destination, { image: buf, caption: `${emoji} ${image.caption || "View-once recovered"}` });
+    if (video) return sock.sendMessage(destination, { video: buf, caption: `${emoji} ${video.caption || "View-once recovered"}` });
+    return sock.sendMessage(destination, { audio: buf, mimetype: audio.mimetype || "audio/mpeg", ptt: !!audio.ptt });
   }
-  await sock.sendMessage(from, original);
+  await sock.sendMessage(destination, { text: `${emoji} View-once message recovered\n${original.conversation || ""}` });
 });
 mk("blur", async ({ sock, from, msg }) => {
   const buf = await sock.downloadMediaMessage(msg);
@@ -793,10 +809,11 @@ mk("setfont", async ({ sock, from, args }) => {
 mk("tts", async ({ sock, from, args }) => {
   const text = args.join(" ");
   if (!text) return sock.sendMessage(from, { text: "Usage: .tts <text>" });
-  const { data } = await axios.get("https://api.streamelements.com/kappa/v2/speech", {
-    params: { voice: "Brian", text: text.slice(0, 450) },
+  const { data } = await axios.get("https://translate.google.com/translate_tts", {
+    params: { ie: "UTF-8", client: "tw-ob", tl: "en", q: text.slice(0, 180) },
     responseType: "arraybuffer",
     timeout: 20000,
+    headers: { "User-Agent": "Mozilla/5.0" },
   });
   await sock.sendMessage(from, { audio: Buffer.from(data), mimetype: "audio/mpeg", ptt: false });
 });

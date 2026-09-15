@@ -803,27 +803,43 @@ register("profile", { toggle: null, run: async ({ sock, from }) => sock.sendMess
 register("opentime", { toggle: null, run: async ({ sock, from, args }) => sock.sendMessage(from, { text: `⏰ Group open time: ${args.join(" ")}` }) });
 
 /* ============================================================
- * 20. COMMANDS — MENU (with channel footer)
- * ============================================================ */
+ * 20. COMMANDS — ATTRACTIVE CATEGORY MENU
+ * ============================================================
 register("menu", {
   toggle: null,
   run: async ({ sock, from }) => {
-    const list = [...commands.keys()].sort();
-    const chunks = [];
-    for (let i = 0; i < list.length; i += 30) chunks.push(list.slice(i, i + 30).map((c) => `▸ .${c}`).join("\n"));
+    const categoryRules = [
+      ["👑 OWNER & BOT", /^(owner|mode|setprefix|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
+      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|tagall|tag|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|opentime|closetime)/i],
+      ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
+      ["🎵 MEDIA & DOWNLOAD", /^(play|song|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
+      ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
+      ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
+      ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
+      ["⚙️ SETTINGS", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|alwaysonline|settings|config|reset)/i],
+    ];
+    const grouped = new Map(categoryRules.map(([title]) => [title, []]));
+    const other = [];
+    for (const command of [...commands.keys()].sort()) {
+      const rule = categoryRules.find(([, pattern]) => pattern.test(command));
+      if (rule) grouped.get(rule[0]).push(command);
+      else other.push(command);
+    }
+    if (other.length) grouped.set("📦 MORE COMMANDS", other);
+
+    const sections = [];
+    for (const [title, items] of grouped) {
+      if (!items.length) continue;
+      sections.push(`╭─❰ *${title}* ❱\n${items.map((c) => `│ ▸ ${config.prefix}${c}`).join("\n")}\n╰──────────────`);
+    }
     const header = `╭━━━❰ *${config.botName}* ❱━━━╮
 ┃ 🤖 Prefix: *${config.prefix}*
-┃ 📦 Total: *${commands.size}* commands
-┃ ⚡ Status: *ONLINE*
+┃ 📦 Commands: *${commands.size}*
+┃ 🟢 Status: *ONLINE*
 ╰━━━━━━━━━━━━━━━━╯\n\n`;
-    const footer = `\n\n╭━━━❰ *Official Channel* ❱━━━╮
-┃ 📢 Join: ${config.channelLink}
-╰━━━━━━━━━━━━━━━━╯
-
-> 💫 *${config.botName}* — Always Fast ⚡`;
-    const body = chunks.slice(0, 3).join("\n\n");
+    const footer = `\n\n> ✨ Type *${config.prefix}help* for this menu\n> ⚡ Fast • Secure • Reliable`;
     await sock.sendMessage(from, {
-      text: header + body + footer,
+      text: header + sections.join("\n\n") + footer,
       contextInfo: {
         forwardingScore: 999,
         isForwarded: true,

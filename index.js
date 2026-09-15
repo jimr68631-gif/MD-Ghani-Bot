@@ -286,8 +286,60 @@ function wireHandlers(sessionId) {
         const old = deletedMessageCache.get(`${item.key.remoteJid}:${item.key.id}`);
         if (!old) continue;
         const oldMessage = unwrapMessage(old.message);
-        const text = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption || "[media message]";
-        await sock.sendMessage(botInbox, { text: `🗑️ *Deleted message recovered*\n📍 Chat: ${item.key.remoteJid}\n👤 Sender: ${item.key.participant || item.key.remoteJid}\n\n${text}` }).catch(() => {});
+        const source = item.key.remoteJid;
+        const originalSender = old.key?.participant || old.key?.remoteJid || "Unknown";
+        const deletedBy = item.key.participant || item.key.remoteJid || "Unknown";
+        const clean = (jid) => String(jid).split("@")[0].split(":")[0];
+        const isGroup = source.endsWith("@g.us");
+        let sourceName = isGroup ? "WhatsApp Group" : "Private Chat";
+        if (isGroup) {
+          try { sourceName = (await sock.groupMetadata(source)).subject || sourceName; } catch {}
+        }
+        const type = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
+          oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
+          oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document" : "Media/Other";
+        const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || "";
+        const text = rawText.replace(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi, "").trim() || "[No text content in this message]";
+        const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
+        const report = `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮
+┃ 🗑️ *Message Deleted & Recovered*
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+📌 *Source Chat:* ${sourceName}
+🆔 *Chat ID:* ${source}
+👤 *Sent By:* +${clean(originalSender)}
+🗑️ *Deleted By:* +${clean(deletedBy)}
+📂 *Message Type:* ${type}
+🕒 *Detected At:* ${deletedAt}
+
+💬 *Message Content:*
+${text}`;
+        await sock.sendMessage(botInbox, { text: report }).catch(() => {});
+        const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: +${clean(originalSender)}\n🗑️ Deleted by: +${clean(deletedBy)}`;
+        try {
+          const fake = { key: old.key, message: old.message };
+          if (oldMessage?.stickerMessage) {
+            const media = await sock.downloadMediaMessage(fake);
+            await sock.sendMessage(botInbox, { sticker: media });
+          } else if (oldMessage?.imageMessage) {
+            const media = await sock.downloadMediaMessage(fake);
+            await sock.sendMessage(botInbox, { image: media, caption: mediaCaption });
+          } else if (oldMessage?.videoMessage) {
+            const media = await sock.downloadMediaMessage(fake);
+            await sock.sendMessage(botInbox, { video: media, caption: mediaCaption });
+          } else if (oldMessage?.audioMessage) {
+            const media = await sock.downloadMediaMessage(fake);
+            await sock.sendMessage(botInbox, { audio: media, mimetype: oldMessage.audioMessage.mimetype || "audio/mpeg", ptt: !!oldMessage.audioMessage.ptt });
+          } else if (oldMessage?.documentMessage) {
+            const media = await sock.downloadMediaMessage(fake);
+            await sock.sendMessage(botInbox, { document: media, mimetype: oldMessage.documentMessage.mimetype || "application/octet-stream", fileName: oldMessage.documentMessage.fileName || "recovered-file", caption: mediaCaption });
+          }
+          const linkText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption || "";
+          const links = linkText.match(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi);
+          if (links?.length) await sock.sendMessage(botInbox, { text: `🔗 *Recovered Link(s)*\n${links.join("\n")}\n\n${mediaCaption}` });
+        } catch (mediaError) {
+          log.warn(`antidelete media recovery failed: ${mediaError?.message || mediaError}`);
+        }
       }
     }
   });

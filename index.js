@@ -145,7 +145,7 @@ const setToggle = (id, key, val) => {
 };
 const isOn = (id, key) => !!getToggles(id)[key];
 const commandKey = (group, name) => `${group}:${String(name).toLowerCase()}`;
-const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) === true;
+const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) !== false;
 const setCommandEnabled = (group, name, enabled) => enabledCommandState.set(commandKey(group, name), enabled);
 
 /* ============================================================

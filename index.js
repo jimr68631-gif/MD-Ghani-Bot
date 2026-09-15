@@ -131,6 +131,7 @@ const pair = {
  *  3. TOGGLE STORE
  * ============================================================ */
 const toggleState = new Map();
+const enabledCommandState = new Map();
 const getToggles = (id) => {
   if (!toggleState.has(id)) toggleState.set(id, { ...defaultToggles });
   return toggleState.get(id);
@@ -142,6 +143,9 @@ const setToggle = (id, key, val) => {
   return true;
 };
 const isOn = (id, key) => !!getToggles(id)[key];
+const commandKey = (group, name) => `${group}:${String(name).toLowerCase()}`;
+const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) === true;
+const setCommandEnabled = (group, name, enabled) => enabledCommandState.set(commandKey(group, name), enabled);
 
 /* ============================================================
  *  4. COMMAND REGISTRY + SESSIONS
@@ -282,7 +286,7 @@ function wireHandlers(sessionId) {
   sock.ev.on("messages.update", async (updates) => {
     const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
     for (const item of updates || []) {
-      if (!item.update?.message && item.key?.remoteJid && item.key?.id && getToggles(sessionId).antidelete) {
+      if (!item.update?.message && item.key?.remoteJid && item.key?.id && getToggles(item.key.remoteJid.endsWith("@g.us") ? item.key.remoteJid : sessionId).antidelete) {
         const old = deletedMessageCache.get(`${item.key.remoteJid}:${item.key.id}`);
         if (!old) continue;
         const oldMessage = unwrapMessage(old.message);
@@ -385,6 +389,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
   const from = msg.key.remoteJid;
   if (!from?.endsWith("@g.us")) return;
   if (msg.key.fromMe) return;
+  toggles = getToggles(from);
 
   const antiKeys = ["antilink", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
   if (!antiKeys.some((key) => toggles[key])) return;
@@ -467,6 +472,23 @@ async function requireGroupAdmin(sock, from, msg) {
   return true;
 }
 
+function isController(sock, from, msg, sessionId) {
+  const sender = msg?.key?.participant || from;
+  const values = [sender, sock.user?.id, sock.user?.lid].filter(Boolean).map((v) => String(v).split(":")[0].split("@")[0]);
+  const owners = config.owner.map((v) => String(v).split("@")[0]);
+  const connected = String(sessionId).replace(/\D/g, "");
+  return values.some((v) => owners.includes(v) || (connected && v === connected));
+}
+
+async function requireBotAdminOnly(sock, from) {
+  if (!from?.endsWith("@g.us")) return false;
+  const phone = sock.user?.id?.split(":")[0];
+  const botIds = [sock.user?.id, sock.user?.lid, phone ? `${phone}@s.whatsapp.net` : null].filter(Boolean);
+  const ok = (await Promise.all(botIds.map((id) => isUserAdmin(sock, from, id))).catch(() => [])).some(Boolean);
+  if (!ok) await sock.sendMessage(from, { text: "❌ Bot must be a group admin first." });
+  return ok;
+}
+
 /* ============================================================
  *  9. FAST MESSAGE HANDLER
  * ============================================================ */
@@ -519,6 +541,25 @@ async function handleMessage(sock, msg, sessionId) {
     if (!cmd) {
       await sock.sendMessage(from, { text: `❌ Unknown command: *${cmdName}*\nType *${config.prefix}menu*` }).catch(() => {});
       return;
+    }
+
+    const inGroup = from.endsWith("@g.us");
+    const ownerCommand = cmd.owner === true;
+    if (!inGroup) {
+      if (!isController(sock, from, msg, sessionId)) {
+        return sock.sendMessage(from, { text: "🚫 This bot accepts commands only from its connected owner." });
+      }
+    } else if (ownerCommand) {
+      if (!isController(sock, from, msg, sessionId)) {
+        return sock.sendMessage(from, { text: "🚫 Owner-only command." });
+      }
+      if (!(await requireBotAdminOnly(sock, from))) return;
+    } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
+      if (!(await requireGroupAdmin(sock, from, msg))) return;
+      const configurable = ANTI_LIST?.includes(normalizedCommand) || ["enable", "disable", "set"].includes(normalizedCommand);
+      if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
+        return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
+      }
     }
 
     if (cmd.toggle && !isOn(sessionId, cmd.toggle)) {
@@ -645,12 +686,12 @@ for (const name of ANTI_LIST) {
     toggle: null,
     run: async ({ sock, from, args, sessionId }) => {
       if (!args[0]) {
-        const t = getToggles(sessionId);
+        const t = getToggles(from.endsWith("@g.us") ? from : sessionId);
         return sock.sendMessage(from, {
           text: `📌 *${name}* = ${t[name] ? "ON ✅" : "OFF ❌"}\nUsage: .${name} on/off`,
         });
       }
-      const ok = setToggle(sessionId, name, args[0]);
+      const ok = setToggle(from.endsWith("@g.us") ? from : sessionId, name, args[0]);
       await sock.sendMessage(from, { text: ok ? `✅ *${name}* = ${args[0].toUpperCase()}` : `❌ Unknown toggle` });
     },
   });
@@ -661,17 +702,17 @@ register("antilink", {
     if (!(await requireGroupAdmin(sock, from, msg))) return;
     const mode = String(args[0] || "").toLowerCase();
     if (!mode) {
-      const enabled = getToggles(sessionId).antilink;
+      const enabled = getToggles(from).antilink;
       const action = antilinkActionState.get(from) || "delete";
       return sock.sendMessage(from, { text: `🔗 Antilink: ${enabled ? "ON ✅" : "OFF ❌"}\nAction: ${action}\nUse: .antilink on | off | kick | delete` });
     }
     if (mode === "kick" || mode === "delete") {
       antilinkActionState.set(from, mode);
-      setToggle(sessionId, "antilink", true);
+      setToggle(from, "antilink", true);
       return sock.sendMessage(from, { text: `✅ Antilink ON\nAction: ${mode}\nLinks will be deleted immediately${mode === "kick" ? " and the sender will be removed." : "."}` });
     }
     if (mode === "on" || mode === "off") {
-      setToggle(sessionId, "antilink", mode);
+      setToggle(from, "antilink", mode);
       return sock.sendMessage(from, { text: `✅ Antilink ${mode.toUpperCase()}` });
     }
     await sock.sendMessage(from, { text: "Usage: .antilink on | off | kick | delete" });
@@ -694,6 +735,26 @@ register("set", {
     if (args.length < 2) return sock.sendMessage(from, { text: "Usage: .set <key> on/off" });
     const ok = setToggle(sessionId, args[0], args[1]);
     await sock.sendMessage(from, { text: ok ? `✅ ${args[0]} = ${args[1]}` : `❌ Unknown key: ${args[0]}` });
+  },
+});
+register("enable", {
+  toggle: null,
+  run: async ({ sock, from, msg, args }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const name = String(args[0] || "").toLowerCase();
+    if (!commands.has(name) || ["menu", "help", "enable", "disable"].includes(name)) return sock.sendMessage(from, { text: "❌ Command not found. Use .menu to view commands." });
+    setCommandEnabled(from, name, true);
+    await sock.sendMessage(from, { text: `✅ *${name}* is now ON for this group.` });
+  },
+});
+register("disable", {
+  toggle: null,
+  run: async ({ sock, from, msg, args }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const name = String(args[0] || "").toLowerCase();
+    if (!commands.has(name)) return sock.sendMessage(from, { text: "❌ Command not found." });
+    setCommandEnabled(from, name, false);
+    await sock.sendMessage(from, { text: `✅ *${name}* is now OFF for this group.` });
   },
 });
 
@@ -743,10 +804,10 @@ async function downloadWithYtDlp(input, kind) {
   const output = `${base}.${ext}`;
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
+    const binary = fs.existsSync("/opt/yt-dlp/bin/yt-dlp") ? "/opt/yt-dlp/bin/yt-dlp" : "yt-dlp";
     const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--extractor-args", "youtube:player_client=tv_embedded,web_safari,android", "--max-filesize", "50M", "-f", format, "-o", output];
     if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
     args.push(url);
-    const binary = fs.existsSync("/opt/yt-dlp/bin/yt-dlp") ? "/opt/yt-dlp/bin/yt-dlp" : "yt-dlp";
     await execFileAsync(binary, args, { timeout: 180000, maxBuffer: 2 * 1024 * 1024 });
     const buffer = await fs.promises.readFile(output);
     if (!buffer.length) throw new Error("Downloaded file is empty");
@@ -1012,8 +1073,9 @@ mk("reactionmenu", async ({ sock, from }) => {
 const isOwner = (from) => config.owner.includes(from);
 const mkOwner = (n, fn) => register(n, {
   toggle: null,
+  owner: true,
   run: async (p) => {
-    if (!isOwner(p.from) && !p.msg.key.fromMe)
+    if (!isController(p.sock, p.from, p.msg, p.sessionId) && !p.msg.key.fromMe)
       return p.sock.sendMessage(p.from, { text: "🚫 Owner only command" });
     await fn(p);
   },

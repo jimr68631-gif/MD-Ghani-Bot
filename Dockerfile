@@ -1,7 +1,9 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg yt-dlp \
+    && apt-get install -y --no-install-recommends ffmpeg python3 python3-venv ca-certificates \
+    && python3 -m venv /opt/yt-dlp \
+    && /opt/yt-dlp/bin/pip install --no-cache-dir --upgrade yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

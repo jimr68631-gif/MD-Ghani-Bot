@@ -142,6 +142,8 @@ const getGroupMessageSettings = (group) => {
     groupMessageSettings.set(group, {
       welcome: "🎉 Welcome to {group}, {user}! You are member #{count}.",
       goodbye: "👋 Goodbye from {group}, {user}. You were member #{count}.",
+      welcomeEnabled: true,
+      goodbyeEnabled: true,
     });
   }
   return groupMessageSettings.get(group);
@@ -314,6 +316,8 @@ function wireHandlers(sessionId) {
       groupMetadataCache.delete(id);
       const md = await sock.groupMetadata(id);
       const settings = getGroupMessageSettings(id);
+      if (action === "add" && !settings.welcomeEnabled) return;
+      if (action !== "add" && !settings.goodbyeEnabled) return;
       const template = action === "add" ? settings.welcome : settings.goodbye;
       const groupName = md.subject || "Group";
       const count = md.participants.length;
@@ -1319,18 +1323,36 @@ register("setgoodbye", { toggle: null, run: async ({ sock, from, args }) => {
   settings.goodbye = args.join(" ") || "👋 Goodbye from {group}, {user}. You were member #{count}.";
   await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nUse: {group} {user} {count}` });
 }});
-register("welcome", { toggle: null, run: async ({ sock, from, msg }) => {
+register("welcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const settings = getGroupMessageSettings(from);
+  const mode = String(args[0] || "").toLowerCase();
+  if (["on", "off"].includes(mode)) {
+    settings.welcomeEnabled = mode === "on";
+    return sock.sendMessage(from, { text: `✅ Welcome messages are now ${settings.welcomeEnabled ? "ON" : "OFF"} for this group.` });
+  }
+  if (["status", "state"].includes(mode)) {
+    return sock.sendMessage(from, { text: `📌 Welcome messages: ${settings.welcomeEnabled ? "ON ✅" : "OFF ❌"}` });
+  }
   const md = await sock.groupMetadata(from);
   const user = msg.key?.participant || from;
-  const text = formatGroupMessage(getGroupMessageSettings(from).welcome, md.subject || "Group", user, md.participants.length);
+  const text = formatGroupMessage(settings.welcome, md.subject || "Group", user, md.participants.length);
   await sock.sendMessage(from, { text, mentions: [user] });
 }});
-register("goodbye", { toggle: null, run: async ({ sock, from, msg }) => {
+register("goodbye", { toggle: null, run: async ({ sock, from, msg, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const settings = getGroupMessageSettings(from);
+  const mode = String(args[0] || "").toLowerCase();
+  if (["on", "off"].includes(mode)) {
+    settings.goodbyeEnabled = mode === "on";
+    return sock.sendMessage(from, { text: `✅ Goodbye messages are now ${settings.goodbyeEnabled ? "ON" : "OFF"} for this group.` });
+  }
+  if (["status", "state"].includes(mode)) {
+    return sock.sendMessage(from, { text: `📌 Goodbye messages: ${settings.goodbyeEnabled ? "ON ✅" : "OFF ❌"}` });
+  }
   const md = await sock.groupMetadata(from);
   const user = msg.key?.participant || from;
-  const text = formatGroupMessage(getGroupMessageSettings(from).goodbye, md.subject || "Group", user, md.participants.length);
+  const text = formatGroupMessage(settings.goodbye, md.subject || "Group", user, md.participants.length);
   await sock.sendMessage(from, { text, mentions: [user] });
 }});
 register("getbio", { toggle: null, run: async ({ sock, from }) => {

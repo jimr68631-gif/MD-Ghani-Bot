@@ -418,10 +418,28 @@ async function handleMessage(sock, msg, sessionId) {
       cmd = {
         toggle: null,
         run: async ({ sock: targetSock, from: targetFrom }) => {
-          const text = `╭━━━❰ *${config.botName}* ❱━━━╮\n┃ 🤖 Prefix: *${config.prefix}*\n┃ 📦 Commands: *${commands.size}*\n┃ 🟢 Status: *ONLINE*\n╰━━━━━━━━━━━━━━━━╯\n\n${[...commands.keys()].sort().map((name) => `▸ ${config.prefix}${name}`).join("\n")}\n\n> ⚡ Fast • Secure • Reliable`;
-          for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) {
-            await targetSock.sendMessage(targetFrom, { text: part });
-          }
+          const groups = [
+            ["👑 OWNER & BOT", /^(owner|mode|setprefix|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
+            ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|tagall|tag|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|opentime|closetime)/i],
+            ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
+            ["🎵 MEDIA & DOWNLOAD", /^(play|song|song2|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
+            ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
+            ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
+            ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
+            ["⚙️ SETTINGS", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|alwaysonline|settings|config|reset)/i],
+          ];
+          const names = [...commands.keys()];
+          const grouped = groups.map(([title, rule]) => [title, names.filter((name) => rule.test(name))]);
+          const used = new Set(grouped.flatMap(([, list]) => list));
+          const other = names.filter((name) => !used.has(name));
+          if (other.length) grouped.push(["📦 MORE COMMANDS", other]);
+          const body = grouped.filter(([, list]) => list.length).map(([title, list]) => `╭─❰ *${title}* ❱\n${list.sort().map((name) => `│ ▸ ${config.prefix}${name}`).join("\n")}\n╰──────────────`).join("\n\n");
+          const text = `╭━━━❰ *${config.botName}* ❱━━━╮\n┃ 🤖 Prefix: *${config.prefix}*\n┃ 📦 Commands: *${commands.size}*\n┃ 🟢 Status: *ONLINE*\n╰━━━━━━━━━━━━━━━━╯\n\n${body}\n\n> ⚡ Fast • Secure • Reliable`;
+          const parts = text.match(/[\s\S]{1,3500}/g) || [text];
+          const contextInfo = { forwardingScore: 999, isForwarded: true, forwardedNewsletterMessageInfo: { newsletterJid: config.channelJid, newsletterName: config.botName, serverMessageId: -1 } };
+          try { await targetSock.sendMessage(targetFrom, { text: parts[0], contextInfo }); }
+          catch { await targetSock.sendMessage(targetFrom, { text: parts[0] }); }
+          for (const part of parts.slice(1)) await targetSock.sendMessage(targetFrom, { text: part });
         },
       };
     }
@@ -652,7 +670,7 @@ async function downloadWithYtDlp(input, kind) {
   const output = `${base}.${ext}`;
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
-    const args = ["--no-playlist", "--no-warnings", "--max-filesize", "50M", "-f", format, "-o", output];
+    const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--extractor-args", "youtube:player_client=android,web", "--max-filesize", "50M", "-f", format, "-o", output];
     if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
     args.push(url);
     await execFileAsync("yt-dlp", args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024 });

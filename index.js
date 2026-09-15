@@ -556,7 +556,7 @@ async function handleMessage(sock, msg, sessionId) {
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       if (!(await requireGroupAdmin(sock, from, msg))) return;
-      const configurable = ANTI_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "set"].includes(normalizedCommand);
+      const configurable = ANTI_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "set"].includes(normalizedCommand);
       if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
         return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
       }
@@ -783,6 +783,29 @@ register("enabled", {
   },
 });
 register("enabledcommands", { toggle: null, run: async (p) => commands.get("enabled").run(p) });
+register("botstatus", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const toggles = getToggles(from);
+    const botIsAdmin = await requireBotAdminOnly(sock, from);
+    const anti = ANTI_LIST.filter((name) => toggles[name]);
+    const enabled = [...commands.keys()].filter((name) => isCommandEnabled(from, name) && !ANTI_LIST.includes(name));
+    const status = botIsAdmin ? "🟢 ACTIVE" : "🔴 INACTIVE — Bot is not group admin";
+    const text = `╭━━━❰ *BOT STATUS* ❱━━━╮
+┃ ${status}
+┃ 📍 Group ID: ${from}
+┃ 🛡️ Bot Admin: ${botIsAdmin ? "YES ✅" : "NO ❌"}
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+⚔️ *Anti-Features ON (${anti.length})*
+${anti.length ? anti.sort().map((name) => `✅ ${config.prefix}${name}`).join("\n") : "❌ No anti-feature is ON"}
+
+🧰 *Normal Commands ON (${enabled.length})*
+${enabled.length ? enabled.sort().map((name) => `✅ ${config.prefix}${name}`).join("\n") : "❌ No normal command is ON"}`;
+    for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) await sock.sendMessage(from, { text: part });
+  },
+});
 
 /* ============================================================
  * 12. COMMANDS — STORY / STATUS

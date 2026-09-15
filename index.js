@@ -355,6 +355,7 @@ ${text}`;
 async function runAuto(sock, msg, sessionId, toggles) {
   const from = msg.key?.remoteJid;
   if (!from) return;
+  toggles = from.endsWith("@g.us") ? getToggles(from) : getToggles(sessionId);
   if (toggles.autoseen) sock.readMessages([msg.key]).catch(() => {});
   if (toggles.autotyping && !msg.key.fromMe) {
     sock.sendPresenceUpdate("composing", from).catch(() => {});
@@ -369,7 +370,19 @@ async function runAuto(sock, msg, sessionId, toggles) {
     const e = emojis[Math.floor(Math.random() * emojis.length)];
     sock.sendMessage(from, { react: { text: e, key: msg.key } }).catch(() => {});
   }
+  if (toggles.autoreacttyping && !msg.key.fromMe) {
+    sock.sendPresenceUpdate("composing", from).catch(() => {});
+  }
+  if (toggles.autorecordtyping && !msg.key.fromMe) {
+    sock.sendPresenceUpdate("recording", from).catch(() => {});
+  }
   if (from === "status@broadcast") {
+    if (toggles.autosavestatus) {
+      const statusMessage = unwrapMessage(msg.message);
+      const statusText = statusMessage?.conversation || statusMessage?.extendedTextMessage?.text || statusMessage?.imageMessage?.caption || statusMessage?.videoMessage?.caption || "[Status media]";
+      const inbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
+      sock.sendMessage(inbox, { text: `💾 *Status Saved*\n👤 From: ${msg.key.participant || "Unknown"}\n\n${statusText}` }).catch(() => {});
+    }
     if (toggles.autoviewstatus) sock.readMessages([msg.key]).catch(() => {});
     if (toggles.autoreactstatus && msg.key.participant) {
       sock.sendMessage("status@broadcast", { react: { text: "❤️", key: msg.key } },
@@ -521,7 +534,7 @@ async function handleMessage(sock, msg, sessionId) {
             ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
             ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
             ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
-            ["⚙️ SETTINGS", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|alwaysonline|settings|config|reset)/i],
+            ["⚙️ SETTINGS & AUTO", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|settings|config|reset)/i],
           ];
           const names = [...commands.keys()];
           const grouped = groups.map(([title, rule]) => [title, names.filter((name) => rule.test(name))]);
@@ -556,7 +569,7 @@ async function handleMessage(sock, msg, sessionId) {
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       if (!(await requireGroupAdmin(sock, from, msg))) return;
-      const configurable = ANTI_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "set"].includes(normalizedCommand);
+      const configurable = ANTI_LIST?.includes(normalizedCommand) || AUTO_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "set"].includes(normalizedCommand);
       if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
         return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
       }
@@ -681,6 +694,19 @@ const ANTI_LIST = [
   "antilink","antilocation","antimessage","antipoll","antistatus","antisticker",
   "antitag","antitagadmin","antivideo","antivoice","antistatuslinkkick",
 ];
+const AUTO_LIST = ["autoseen", "autotyping", "autorecording", "autoreact", "autoviewstatus", "autoreactstatus", "autosavestatus", "autoreacttyping", "autorecordtyping"];
+for (const name of AUTO_LIST) {
+  register(name, {
+    toggle: null,
+    run: async ({ sock, from, msg, args }) => {
+      if (!(await requireGroupAdmin(sock, from, msg))) return;
+      const scope = from.endsWith("@g.us") ? from : from;
+      if (!args[0]) return sock.sendMessage(from, { text: `📌 *${name}* = ${getToggles(scope)[name] ? "ON ✅" : "OFF ❌"}\nUsage: .${name} on/off` });
+      setToggle(scope, name, args[0]);
+      await sock.sendMessage(from, { text: `✅ *${name}* = ${getToggles(scope)[name] ? "ON" : "OFF"} for this group` });
+    },
+  });
+}
 for (const name of ANTI_LIST) {
   register(name, {
     toggle: null,
@@ -1253,7 +1279,7 @@ register("menu", {
       ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
       ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
       ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
-      ["⚙️ SETTINGS", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|alwaysonline|settings|config|reset)/i],
+      ["⚙️ SETTINGS & AUTO", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|settings|config|reset)/i],
     ];
     const grouped = new Map(categoryRules.map(([title]) => [title, []]));
     const other = [];

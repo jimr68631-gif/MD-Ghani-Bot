@@ -1,7 +1,8 @@
 FROM node:20-bullseye
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg imagemagick webp git python3 build-essential \
+# Only ffmpeg is required by the bot's media commands.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -15,5 +16,3 @@ RUN mkdir -p sessions
 EXPOSE 3000
 
 CMD ["node", "index.js"]
-
-# Railway automatically provides PORT; the app reads process.env.PORT

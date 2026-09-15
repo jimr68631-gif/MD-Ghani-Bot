@@ -556,7 +556,7 @@ async function handleMessage(sock, msg, sessionId) {
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       if (!(await requireGroupAdmin(sock, from, msg))) return;
-      const configurable = ANTI_LIST?.includes(normalizedCommand) || ["enable", "disable", "set"].includes(normalizedCommand);
+      const configurable = ANTI_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "set"].includes(normalizedCommand);
       if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
         return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
       }
@@ -757,6 +757,32 @@ register("disable", {
     await sock.sendMessage(from, { text: `✅ *${name}* is now OFF for this group.` });
   },
 });
+register("enabled", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const toggles = getToggles(from);
+    const normal = [...commands.keys()].filter((name) => isCommandEnabled(from, name) && !ANTI_LIST.includes(name));
+    const anti = ANTI_LIST.filter((name) => toggles[name]);
+    const text = [
+      `╭━━━❰ *ENABLED COMMANDS* ❱━━━╮`,
+      `┃ 📍 Group: ${from}`,
+      `┃ 🟢 Total: ${normal.length + anti.length}`,
+      `╰━━━━━━━━━━━━━━━━━━━━╯`,
+      ``,
+      `🧰 *Normal Commands*`,
+      normal.length ? normal.sort().map((name) => `│ ✅ ${config.prefix}${name}`).join("\n") : "│ ❌ No normal command enabled",
+      ``,
+      `🛡️ *Anti Features*`,
+      anti.length ? anti.sort().map((name) => `│ ✅ ${config.prefix}${name}`).join("\n") : "│ ❌ No anti feature enabled",
+      ``,
+      `💡 Enable: *.enable <command>*`,
+      `💡 Disable: *.disable <command>*`,
+    ].join("\n");
+    for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) await sock.sendMessage(from, { text: part });
+  },
+});
+register("enabledcommands", { toggle: null, run: async (p) => commands.get("enabled").run(p) });
 
 /* ============================================================
  * 12. COMMANDS — STORY / STATUS

@@ -133,6 +133,23 @@ const pair = {
  * ============================================================ */
 const toggleState = new Map();
 const enabledCommandState = new Map();
+const groupMessageSettings = new Map();
+const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
+  "song", "play", "song2", "video", "tagall", "welcome", "goodbye", "setwelcome", "setgoodbye",
+]);
+const getGroupMessageSettings = (group) => {
+  if (!groupMessageSettings.has(group)) {
+    groupMessageSettings.set(group, {
+      welcome: "🎉 Welcome to {group}, {user}! You are member #{count}.",
+      goodbye: "👋 Goodbye from {group}, {user}. You were member #{count}.",
+    });
+  }
+  return groupMessageSettings.get(group);
+};
+const formatGroupMessage = (template, groupName, user, count) => String(template)
+  .replaceAll("{group}", groupName)
+  .replaceAll("{user}", `@${user.split("@")[0]}`)
+  .replaceAll("{count}", String(count));
 const getToggles = (id) => {
   if (!toggleState.has(id)) toggleState.set(id, { ...defaultToggles });
   return toggleState.get(id);
@@ -289,6 +306,23 @@ function wireHandlers(sessionId) {
       Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
       Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch((e) => log.error(`anti: ${e.message}`));
       Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
+    }
+  });
+  sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
+    if (!id?.endsWith("@g.us") || !["add", "remove", "leave"].includes(action)) return;
+    try {
+      groupMetadataCache.delete(id);
+      const md = await sock.groupMetadata(id);
+      const settings = getGroupMessageSettings(id);
+      const template = action === "add" ? settings.welcome : settings.goodbye;
+      const groupName = md.subject || "Group";
+      const count = md.participants.length;
+      for (const user of participants || []) {
+        const text = formatGroupMessage(template, groupName, user, count);
+        await sock.sendMessage(id, { text, mentions: [user] });
+      }
+    } catch (e) {
+      log.warn(`welcome/goodbye message failed: ${e?.message || e}`);
     }
   });
   sock.ev.on("messages.update", async (updates) => {
@@ -474,7 +508,7 @@ async function isUserAdmin(sock, group, user) {
   } catch { return false; }
 }
 
-async function requireGroupAdmin(sock, from, msg) {
+async function requireGroupAdmin(sock, from, msg, botMustBeAdmin = true) {
   if (!from?.endsWith("@g.us")) {
     await sock.sendMessage(from, { text: "❌ This command works only in groups." });
     return false;
@@ -484,7 +518,7 @@ async function requireGroupAdmin(sock, from, msg) {
     await sock.sendMessage(from, { text: "❌ Only group admins can use this command." });
     return false;
   }
-  if (!(await isBotAdmin(sock, from))) return false;
+  if (botMustBeAdmin && !(await isBotAdmin(sock, from))) return false;
   return true;
 }
 
@@ -527,7 +561,7 @@ async function handleMessage(sock, msg, sessionId) {
     const [cmdName, ...args] = commandText.slice(config.prefix.length).trim().split(/\s+/);
     if (!cmdName) return;
     const normalizedCommand = String(cmdName).trim().toLowerCase();
-    if (from.endsWith("@g.us") && !(await isBotAdmin(sock, from))) return;
+    if (from.endsWith("@g.us") && !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand) && !(await isBotAdmin(sock, from))) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -576,7 +610,7 @@ async function handleMessage(sock, msg, sessionId) {
       }
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
-      if (!(await requireGroupAdmin(sock, from, msg))) return;
+      if (!(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
       const configurable = ANTI_LIST?.includes(normalizedCommand) || AUTO_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "warn", "set"].includes(normalizedCommand);
       if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
         return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
@@ -1160,7 +1194,7 @@ for (const [name, emoji] of Object.entries(REACTIONS)) {
   mk(name, async ({ sock, from, msg }) => {
     const t = msg.message?.extendedTextMessage?.contextInfo?.participant || from;
     await sock.sendMessage(from, {
-      text: `${emoji} *${name.toUpperCase()}*\n@${t.split("@")[0]} ➜ @${from.split("@")[0]}`,
+      text: `${emoji} *${name.toUpperCase()}*\n@${t.split("@")[0]} ➜ @${from.split("@")[0]}\n🎁 Gift sent with love!`,
       mentions: [t, from],
     });
   });
@@ -1275,14 +1309,29 @@ register("warn", {
 /* ============================================================
  * 19. COMMANDS — SETTINGS
  * ============================================================ */
-const settings = {};
 register("setwelcome", { toggle: null, run: async ({ sock, from, args }) => {
-  settings.welcome = args.join(" ");
-  await sock.sendMessage(from, { text: `✅ Welcome set: ${settings.welcome}` });
+  const settings = getGroupMessageSettings(from);
+  settings.welcome = args.join(" ") || "🎉 Welcome to {group}, {user}! You are member #{count}.";
+  await sock.sendMessage(from, { text: `✅ Welcome message set:\n${settings.welcome}\n\nUse: {group} {user} {count}` });
 }});
 register("setgoodbye", { toggle: null, run: async ({ sock, from, args }) => {
-  settings.goodbye = args.join(" ");
-  await sock.sendMessage(from, { text: `✅ Goodbye set: ${settings.goodbye}` });
+  const settings = getGroupMessageSettings(from);
+  settings.goodbye = args.join(" ") || "👋 Goodbye from {group}, {user}. You were member #{count}.";
+  await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nUse: {group} {user} {count}` });
+}});
+register("welcome", { toggle: null, run: async ({ sock, from, msg }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const md = await sock.groupMetadata(from);
+  const user = msg.key?.participant || from;
+  const text = formatGroupMessage(getGroupMessageSettings(from).welcome, md.subject || "Group", user, md.participants.length);
+  await sock.sendMessage(from, { text, mentions: [user] });
+}});
+register("goodbye", { toggle: null, run: async ({ sock, from, msg }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const md = await sock.groupMetadata(from);
+  const user = msg.key?.participant || from;
+  const text = formatGroupMessage(getGroupMessageSettings(from).goodbye, md.subject || "Group", user, md.participants.length);
+  await sock.sendMessage(from, { text, mentions: [user] });
 }});
 register("getbio", { toggle: null, run: async ({ sock, from }) => {
   const st = await sock.fetchStatus(from);
@@ -1311,13 +1360,13 @@ register("menu", {
   run: async ({ sock, from }) => {
     const categoryRules = [
       ["👑 OWNER & BOT", /^(owner|mode|setprefix|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
-      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|tagall|tag|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|opentime|closetime)/i],
+      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|tagall|tag|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|opentime|closetime|welcome|goodbye)/i],
       ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
       ["🎵 MEDIA & DOWNLOAD", /^(play|song|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
       ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
-      ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
+      ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|cuddle|kiss|hug|poke|slap|pat|kill|shoot|smile|wink|danger|shy|reactionmenu|punch|diceroll|coin|8ball)/i],
       ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
-      ["⚙️ SETTINGS & AUTO", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|settings|config|reset)/i],
+      ["⚙️ SETTINGS & AUTO", /^(set|toggle|enable|disable|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|settings|config|reset|setwelcome|setgoodbye)/i],
     ];
     const grouped = new Map(categoryRules.map(([title]) => [title, []]));
     const other = [];

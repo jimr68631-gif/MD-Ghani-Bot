@@ -141,7 +141,7 @@ const isOn = (id, key) => !!getToggles(id)[key];
  *  4. COMMAND REGISTRY + SESSIONS
  * ============================================================ */
 const commands = new Map();
-const register = (name, opts) => commands.set(name.toLowerCase(), opts);
+const register = (name, opts) => commands.set(String(name).trim().toLowerCase(), opts);
 const sessions = new Map();
 let baileysVersionPromise;
 
@@ -379,8 +379,20 @@ async function handleMessage(sock, msg, sessionId) {
 
     const [cmdName, ...args] = commandText.slice(config.prefix.length).trim().split(/\s+/);
     if (!cmdName) return;
-    const cmd = commands.get(cmdName.toLowerCase());
-    log.info(`📨 Command received: ${cmdName.toLowerCase()} from ${from}`);
+    const normalizedCommand = String(cmdName).trim().toLowerCase();
+    let cmd = commands.get(normalizedCommand);
+    log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
+    if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
+      cmd = {
+        toggle: null,
+        run: async ({ sock: targetSock, from: targetFrom }) => {
+          const text = `╭━━━❰ *${config.botName}* ❱━━━╮\n┃ 🤖 Prefix: *${config.prefix}*\n┃ 📦 Commands: *${commands.size}*\n┃ 🟢 Status: *ONLINE*\n╰━━━━━━━━━━━━━━━━╯\n\n${[...commands.keys()].sort().map((name) => `▸ ${config.prefix}${name}`).join("\n")}\n\n> ⚡ Fast • Secure • Reliable`;
+          for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) {
+            await targetSock.sendMessage(targetFrom, { text: part });
+          }
+        },
+      };
+    }
     if (!cmd) {
       await sock.sendMessage(from, { text: `❌ Unknown command: *${cmdName}*\nType *${config.prefix}menu*` }).catch(() => {});
       return;

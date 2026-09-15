@@ -177,6 +177,12 @@ async function startSession(sessionId, phoneNumber) {
     if (connection === "open") {
       log.info(`🟢 ${sessionId} connected`);
       wireHandlers(sessionId);
+      const ownerJid = config.owner?.[0];
+      if (ownerJid) {
+        sock.sendMessage(ownerJid, {
+          text: `✅ *${config.botName} Connected*\n\n📱 Session: ${sessionId}\n🟢 Status: Online\n\nType *${config.prefix}menu* to open the command menu.`,
+        }).catch((e) => log.error(`connect notice: ${e?.message || e}`));
+      }
     }
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
@@ -323,14 +329,16 @@ async function isUserAdmin(sock, group, user) {
  * ============================================================ */
 async function handleMessage(sock, msg, sessionId) {
   try {
-    const from = msg.key.remoteJid;
+    const from = msg.key?.remoteJid;
+    if (!from) return;
     const message = unwrapMessage(msg.message);
     const text = message?.conversation || message?.extendedTextMessage?.text ||
       message?.imageMessage?.caption || message?.videoMessage?.caption ||
       message?.documentMessage?.caption || "";
-    if (!text.startsWith(config.prefix)) return;
+    const commandText = String(text).trim();
+    if (!commandText.startsWith(config.prefix)) return;
 
-    const [cmdName, ...args] = text.slice(config.prefix.length).trim().split(/\s+/);
+    const [cmdName, ...args] = commandText.slice(config.prefix.length).trim().split(/\s+/);
     if (!cmdName) return;
     const cmd = commands.get(cmdName.toLowerCase());
     if (!cmd) return;
@@ -342,7 +350,7 @@ async function handleMessage(sock, msg, sessionId) {
     }
 
     try {
-      await cmd.run({ sock, msg, from, args, sessionId, text, cmdName });
+      await cmd.run({ sock, msg, from, args, sessionId, text: commandText, cmdName });
     } catch (e) {
       log.error(`cmd ${cmdName}: ${e?.stack || e}`);
       await sock.sendMessage(from, { text: `❌ Command *${cmdName}* failed: ${e?.message || "try again"}` }).catch(() => {});
@@ -854,22 +862,9 @@ register("menu", {
 ╰━━━━━━━━━━━━━━━━╯\n\n`;
     const footer = `\n\n> ✨ Type *${config.prefix}help* for this menu\n> ⚡ Fast • Secure • Reliable`;
     const menuText = header + sections.join("\n\n") + footer;
-    const contextInfo = {
-      forwardingScore: 999,
-      isForwarded: true,
-      forwardedNewsletterMessageInfo: {
-        newsletterJid: config.channelJid,
-        newsletterName: config.botName,
-        serverMessageId: -1,
-      },
-    };
-    try {
-      await sock.sendMessage(from, { text: menuText, contextInfo });
-    } catch (e) {
-      log.error(`menu context send failed: ${e?.message || e}`);
-      // Some WhatsApp clients reject forwarded metadata; always keep the menu usable.
-      const safeParts = menuText.match(/[\s\S]{1,3500}/g) || [menuText];
-      for (const part of safeParts) await sock.sendMessage(from, { text: part });
+    const safeParts = menuText.match(/[\s\S]{1,3500}/g) || [menuText];
+    for (const part of safeParts) {
+      await sock.sendMessage(from, { text: part });
     }
   },
 });

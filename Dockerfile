@@ -1,6 +1,5 @@
 FROM node:20-bullseye
 
-# Only ffmpeg is required by the bot's media commands.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*

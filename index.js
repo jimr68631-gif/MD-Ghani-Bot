@@ -135,15 +135,15 @@ const toggleState = new Map();
 const enabledCommandState = new Map();
 const groupMessageSettings = new Map();
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
-  "song", "play", "song2", "video", "tagall", "welcome", "goodbye", "setwelcome", "setgoodbye",
+  "song", "play", "song2", "video", "tagall", "welcome", "goodbye", "setwelcome", "setgoodbye", "dp",
 ]);
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
     groupMessageSettings.set(group, {
       welcome: "🎉 Welcome {user} to {group}. You are member #{count}.",
       goodbye: "👋 Goodbye {user} from {group}. You are member #{count}.",
-      welcomeEnabled: true,
-      goodbyeEnabled: true,
+      welcomeEnabled: false,
+      goodbyeEnabled: false,
     });
   }
   return groupMessageSettings.get(group);

@@ -150,6 +150,8 @@ const commands = new Map();
 const register = (name, opts) => commands.set(String(name).trim().toLowerCase(), opts);
 const sessions = new Map();
 let shuttingDown = false;
+const deletedMessageCache = new Map();
+const warningState = new Map();
 let baileysVersionPromise;
 
 function getBaileysVersion() {
@@ -270,9 +272,23 @@ function wireHandlers(sessionId) {
     const toggles = getToggles(sessionId);
     for (const msg of messages) {
       if (!msg.message) continue;
+      deletedMessageCache.set(`${msg.key.remoteJid}:${msg.key.id}`, msg);
+      if (deletedMessageCache.size > 1000) deletedMessageCache.delete(deletedMessageCache.keys().next().value);
       Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
       Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch((e) => log.error(`anti: ${e.message}`));
       Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
+    }
+  });
+  sock.ev.on("messages.update", async (updates) => {
+    const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
+    for (const item of updates || []) {
+      if (!item.update?.message && item.key?.remoteJid && item.key?.id && getToggles(sessionId).antidelete) {
+        const old = deletedMessageCache.get(`${item.key.remoteJid}:${item.key.id}`);
+        if (!old) continue;
+        const oldMessage = unwrapMessage(old.message);
+        const text = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption || "[media message]";
+        await sock.sendMessage(botInbox, { text: `🗑️ *Deleted message recovered*\n📍 Chat: ${item.key.remoteJid}\n👤 Sender: ${item.key.participant || item.key.remoteJid}\n\n${text}` }).catch(() => {});
+      }
     }
   });
 }
@@ -372,7 +388,9 @@ async function isUserAdmin(sock, group, user) {
     const cached = groupMetadataCache.get(group);
     const md = cached && cached.expires > Date.now() ? cached.data : await sock.groupMetadata(group);
     groupMetadataCache.set(group, { data: md, expires: Date.now() + 30000 });
-    return md.participants.find((p) => p.id === user)?.admin != null;
+    const clean = String(user || "").split(":")[0];
+    const participant = md.participants.find((p) => p.id === user || p.jid === user || String(p.id).split(":")[0] === clean || String(p.jid || "").split(":")[0] === clean);
+    return !!(participant?.admin || participant?.isAdmin || participant?.role === "admin" || participant?.role === "superadmin");
   } catch { return false; }
 }
 
@@ -386,8 +404,11 @@ async function requireGroupAdmin(sock, from, msg) {
     await sock.sendMessage(from, { text: "❌ Only group admins can use this command." });
     return false;
   }
-  const botId = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
-  if (!(await isUserAdmin(sock, from, botId))) {
+  const phone = sock.user?.id?.split(":")[0];
+  const botIds = [sock.user?.id, sock.user?.lid, phone ? `${phone}@s.whatsapp.net` : null].filter(Boolean);
+  const botIsAdmin = (await Promise.all(botIds.map((id) => isUserAdmin(sock, from, id))).catch(() => []))
+    .some(Boolean);
+  if (!botIsAdmin) {
     await sock.sendMessage(from, { text: "❌ Bot must be a group admin first." });
     return false;
   }
@@ -670,10 +691,11 @@ async function downloadWithYtDlp(input, kind) {
   const output = `${base}.${ext}`;
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
-    const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--extractor-args", "youtube:player_client=android,web", "--max-filesize", "50M", "-f", format, "-o", output];
+    const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--extractor-args", "youtube:player_client=tv_embedded,web_safari,android", "--max-filesize", "50M", "-f", format, "-o", output];
     if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
     args.push(url);
-    await execFileAsync("yt-dlp", args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024 });
+    const binary = fs.existsSync("/opt/yt-dlp/bin/yt-dlp") ? "/opt/yt-dlp/bin/yt-dlp" : "yt-dlp";
+    await execFileAsync(binary, args, { timeout: 180000, maxBuffer: 2 * 1024 * 1024 });
     const buffer = await fs.promises.readFile(output);
     if (!buffer.length) throw new Error("Downloaded file is empty");
     return { buffer, title: input, mimetype: kind === "audio" ? "audio/mpeg" : "video/mp4" };
@@ -1003,6 +1025,24 @@ mkOwner("everyonemsg", async ({ sock, from, args }) => {
 mkOwner("mycmd", async ({ sock, from }) => {
   const list = [...commands.keys()].sort().join(", ");
   await sock.sendMessage(from, { text: `📜 *Commands (${commands.size})*\n\n${list}` });
+});
+register("warn", {
+  toggle: null,
+  run: async ({ sock, from, msg, args }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
+    if (!target) return sock.sendMessage(from, { text: "❌ Reply to the member's message with .warn" });
+    const key = `${from}:${target}`;
+    const limit = Math.max(1, Number(args[0]) || 3);
+    const count = (warningState.get(key) || 0) + 1;
+    warningState.set(key, count);
+    if (count >= limit) {
+      warningState.delete(key);
+      await sock.groupParticipantsUpdate(from, [target], "remove").catch(() => {});
+      return sock.sendMessage(from, { text: `🚫 @${target.split("@")[0]} removed after ${limit} warnings.`, mentions: [target] });
+    }
+    await sock.sendMessage(from, { text: `⚠️ Warning ${count}/${limit} for @${target.split("@")[0]}. Next violation may remove the member.`, mentions: [target] });
+  },
 });
 
 /* ============================================================

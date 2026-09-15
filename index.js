@@ -219,13 +219,13 @@ function wireHandlers(sessionId) {
   const sock = sess.sock;
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append") return;
     const toggles = getToggles(sessionId);
     for (const msg of messages) {
       if (!msg.message) continue;
-      Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch(() => {});
-      Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch(() => {});
-      Promise.resolve(handleMessage(sock, msg, sessionId)).catch(() => {});
+      Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
+      Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch((e) => log.error(`anti: ${e.message}`));
+      Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
     }
   });
 }
@@ -324,11 +324,14 @@ async function isUserAdmin(sock, group, user) {
 async function handleMessage(sock, msg, sessionId) {
   try {
     const from = msg.key.remoteJid;
-    const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text ||
-      msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || "";
+    const message = unwrapMessage(msg.message);
+    const text = message?.conversation || message?.extendedTextMessage?.text ||
+      message?.imageMessage?.caption || message?.videoMessage?.caption ||
+      message?.documentMessage?.caption || "";
     if (!text.startsWith(config.prefix)) return;
 
     const [cmdName, ...args] = text.slice(config.prefix.length).trim().split(/\s+/);
+    if (!cmdName) return;
     const cmd = commands.get(cmdName.toLowerCase());
     if (!cmd) return;
 
@@ -338,9 +341,21 @@ async function handleMessage(sock, msg, sessionId) {
       });
     }
 
-    Promise.resolve(cmd.run({ sock, msg, from, args, sessionId, text, cmdName }))
-      .catch((e) => log.error(`cmd ${cmdName}: ${e.message}`));
+    try {
+      await cmd.run({ sock, msg, from, args, sessionId, text, cmdName });
+    } catch (e) {
+      log.error(`cmd ${cmdName}: ${e?.stack || e}`);
+      await sock.sendMessage(from, { text: `❌ Command *${cmdName}* failed: ${e?.message || "try again"}` }).catch(() => {});
+    }
   } catch (e) { log.error("handler: " + e.message); }
+}
+
+function unwrapMessage(message) {
+  return message?.ephemeralMessage?.message ||
+    message?.viewOnceMessage?.message ||
+    message?.viewOnceMessageV2?.message ||
+    message?.documentWithCaptionMessage?.message ||
+    message;
 }
 
 /* ============================================================

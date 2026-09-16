@@ -147,15 +147,42 @@ const pair = {
 const toggleState = new Map();
 const groupMessageSettings = new Map();
 const antiWarningCounts = new Map();
-const antiWarningStyles = [
-  (user, key) => `⚠️ *WARNING (1/3)*\n@${user} — *${key}* is not allowed in this group.\nPlease do not repeat it.`,
-  (user, key) => `╭━━━❰ ⚠️ WARNING 2/3 ❱━━━╮\n┃ @${user}\n┃ *${key}* is not allowed here.\n┃ Next violation will remove you.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
-  (user, key) => `🚨 *FINAL WARNING (3/3)* 🚨\n@${user} — *${key}* is still not allowed in this group.\n🚫 You are being removed now.`,
-];
+const antiWarningStyles = {
+  1: [
+    (user, key) => `⚠️ *WARNING (1/3)*\n@${user}, *${key}* are not allowed in this group.\nNext time you will be removed.`,
+    (user, key) => `╭━━━❰ ⚠️ WARNING 1/3 ❱━━━╮\n┃ @${user}\n┃ *${key}* are not allowed here.\n┃ Next time you will be removed.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
+    (user, key) => `🚨 *GROUP WARNING • 1/3* 🚨\n@${user} — please stop using *${key}*.\n⚠️ Next violation = removal.`,
+    (user, key) => `⚠️ @${user}\nThis is warning *1 of 3*. *${key}* are not allowed in this group.\n🔔 Next time you will be removed.`,
+  ],
+  2: [
+    (user, key) => `⚠️ *WARNING (2/3)*\n@${user}, *${key}* are still not allowed here.\n🚫 One more violation and you will be removed.`,
+    (user, key) => `╭━━━❰ 🚨 WARNING 2/3 ❱━━━╮\n┃ @${user}\n┃ This is your second warning for *${key}*.\n┃ Next violation will remove you.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
+    (user, key) => `🔔 *SECOND WARNING* — 2/3\n@${user}, do not repeat *${key}* in this group.\n⛔ Final warning is next.`,
+    (user, key) => `⚠️ @${user}\nWarning *2 of 3*: *${key}* are not allowed.\n🚪 Repeat it once more and you will be removed.`,
+  ],
+  3: [
+    (user, key) => `🚨 *FINAL WARNING (3/3)* 🚨\n@${user}, *${key}* are not allowed in this group.\n🚫 You are being removed now.`,
+    (user, key) => `╭━━━❰ 🚫 FINAL WARNING 3/3 ❱━━━╮\n┃ @${user}\n┃ *${key}* violated the group rules.\n┃ Removing you now.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
+    (user, key) => `⛔ *WARNING 3/3 — FINAL*\n@${user}, this was your last warning for *${key}*.\n👋 You will now be removed from the group.`,
+    (user, key) => `🚨 @${user}\nThird and final warning for *${key}*.\n🔨 Group protection is removing you now.`,
+  ],
+};
+const antiWarningLastStyle = new Map();
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
-  "song", "play", "song2", "video", "tagall", "tag", "movie",
+  "song", "dp", "play", "song2", "video", "tagall", "tag", "movie",
   "welcome", "goodbye", "setwelcome", "setgoodbye",
 ]);
+const OWNER_ONLY_COMMANDS = new Set([
+  "song", "dp", "welcome", "goodbye", "setwelcome", "setgoodbye",
+  "song2", "video", "tagall", "tag", "movie",
+]);
+const commandState = new Map();
+const getCommandState = (scope) => {
+  if (!commandState.has(scope)) commandState.set(scope, new Map());
+  return commandState.get(scope);
+};
+const isCommandEnabled = (scope, name) => getCommandState(scope).get(name) === true;
+const setCommandEnabled = (scope, name, enabled) => getCommandState(scope).set(name, enabled);
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
     groupMessageSettings.set(group, {
@@ -550,7 +577,14 @@ async function takeAction(sock, group, user, msg, key) {
     antiWarningCounts.set(warningKey, warningNumber);
     await sock.sendMessage(group, { delete: msg.key }).catch(() => {});
     const shouldRemove = warningNumber >= 3;
-    const warningText = antiWarningStyles[warningNumber - 1](user.split("@")[0], key.toUpperCase());
+    const styleKey = `${group}:${user}:${warningNumber}`;
+    const styles = antiWarningStyles[warningNumber] || antiWarningStyles[1];
+    let styleIndex = Math.floor(Math.random() * styles.length);
+    if (styles.length > 1 && styleIndex === antiWarningLastStyle.get(styleKey)) {
+      styleIndex = (styleIndex + 1) % styles.length;
+    }
+    antiWarningLastStyle.set(styleKey, styleIndex);
+    const warningText = styles[styleIndex](user.split("@")[0], key.toUpperCase());
     await sock.sendMessage(group, {
       text: warningText,
       mentions: [user],
@@ -628,8 +662,9 @@ async function handleMessage(sock, msg, sessionId) {
     const normalizedCommand = String(cmdName).trim().toLowerCase();
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
+    if (groupChat && !controller) return;
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
-    if (groupChat && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
+    if (groupChat && !botAdmin && !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -666,6 +701,21 @@ async function handleMessage(sock, msg, sessionId) {
       return;
     }
 
+    // The selected commands are private to the connected owner in every group.
+    // Everyone else is ignored without a reply, even when the bot is a group admin.
+    if (groupChat && OWNER_ONLY_COMMANDS.has(normalizedCommand) && !controller) return;
+
+    // Every normal command starts OFF. Only the connected owner can turn a command on/off.
+    const commandScope = groupChat ? from : sessionId;
+    if ((args[0] === "on" || args[0] === "off") && controller) {
+      setCommandEnabled(commandScope, normalizedCommand, args[0] === "on");
+      if (!["welcome", "goodbye", ...ANTI_LIST, ...AUTO_LIST].includes(normalizedCommand)) {
+        return sock.sendMessage(from, {
+          text: styledToggleReply(normalizedCommand, args[0] === "on", `Command control updated for this ${groupChat ? "group" : "session"}`),
+        });
+      }
+    }
+
     const inGroup = from.endsWith("@g.us");
     const ownerCommand = cmd.owner === true;
     if (!inGroup) {
@@ -680,6 +730,15 @@ async function handleMessage(sock, msg, sessionId) {
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
+    }
+
+    const commandControlExempt = new Set(["welcome", "goodbye", ...ANTI_LIST, ...AUTO_LIST]);
+    if (!commandControlExempt.has(normalizedCommand) && !isCommandEnabled(commandScope, normalizedCommand)) {
+      // Non-owner users must remain completely silent while commands are OFF.
+      if (!controller) return;
+      return sock.sendMessage(from, {
+        text: styledToggleReply(normalizedCommand, false, `Enable with .${normalizedCommand} on`),
+      });
     }
 
     if (cmd.toggle && !isOn(sessionId, cmd.toggle)) {
@@ -767,7 +826,7 @@ mk("tagall", async ({ sock, from, args }) => {
   const mentions = md.participants.map((p) => p.id);
   const emojis = ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😎", "🤩", "🥳", "😋", "🤔", "🤨", "😐", "😑", "😶", "🙄", "😏", "😣", "😥", "😮", "🤐", "😯", "😪", "😫", "🥱", "😴", "😌", "🤓", "😛", "😜", "🤪", "😝", "🤗", "🤭", "🫡", "🤫", "🤔", "🫠", "🔥", "⚡", "💫", "🌟", "🚀", "🎉", "💥", "✨", "🤯", "🎯", "💯", "❤️"];
   const tagEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-  const lines = mentions.map((m, i) => `${i + 1}. ${tagEmoji} @${m.split("@")[0]}`);
+  const lines = mentions.map((m) => `${tagEmoji} @${m.split("@")[0]}`);
   const heading = `❏ Group : ${md.subject || "Group"}
 ❏ Members: ${mentions.length}
 ❏ Message: ${txt}
@@ -982,16 +1041,19 @@ mk("movie", async ({ sock, from, args }) => {
 ┃ 🎬 Title: *${input}*
 ╰━━━━━━━━━━━━━━━━━━━━╯
 ${trailer ? `
-▶️ *Official Trailer*
+▶️ *Official Trailer / Preview*
 ${trailer.title}
-${trailer.url}` : "\n▶️ Official trailer not found"}
+${trailer.url}
+✅ Direct official preview link above` : "\n▶️ Official trailer not found"}
 
-🔎 *Legal streaming availability*
-JustWatch: https://www.justwatch.com/us/search?q=${q}
-Google Play Movies: https://play.google.com/store/search?q=${q}&c=movies
-Apple TV: https://tv.apple.com/us/search?term=${q}
+🔎 *Legal streaming / rental sources*
+JustWatch (country-wise availability): https://www.justwatch.com/us/search?q=${q}
+Google TV / Movies (rent or buy): https://play.google.com/store/search?q=${q}&c=movies
+Apple TV (official search): https://tv.apple.com/us/search?term=${q}
+Netflix (official search): https://www.netflix.com/search?q=${q}
+Prime Video (official search): https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${q}
 
-ℹ️ Availability and pricing depend on your country. Full copyrighted movie files are not downloaded.`;
+ℹ️ Availability and pricing depend on your country. Copyrighted movie files are not downloaded; use the legal sources above to watch, rent, or buy.`;
   await sock.sendMessage(from, { text });
 });
 async function downloadWithYtDlp(input, kind) {

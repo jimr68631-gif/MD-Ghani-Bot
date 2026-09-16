@@ -169,12 +169,12 @@ const antiWarningStyles = {
 };
 const antiWarningLastStyle = new Map();
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
-  "song", "dp", "play", "song2", "video", "tagall", "tag", "movie",
-  "welcome", "goodbye", "setwelcome", "setgoodbye",
+  "song", "setgrouppp", "welcome", "goodbye", "song2", "video", "tagall", "tag",
+  "antidelete",
 ]);
 const OWNER_ONLY_COMMANDS = new Set([
-  "song", "dp", "welcome", "goodbye", "setwelcome", "setgoodbye",
-  "song2", "video", "tagall", "tag", "movie",
+  "song", "setgrouppp", "welcome", "goodbye", "song2", "video", "tagall", "tag",
+  "antidelete",
 ]);
 const commandState = new Map();
 const getCommandState = (scope) => {
@@ -408,7 +408,7 @@ function wireHandlers(sessionId) {
       const deletedKey = item.update?.message?.protocolMessage?.key || item.key;
       const deletedChat = deletedKey?.remoteJid;
       const deletedId = deletedKey?.id;
-      if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(deletedChat.endsWith("@g.us") ? deletedChat : sessionId).antidelete) {
+      if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(sessionId).antidelete) {
         const old = deletedMessageCache.get(`${deletedChat}:${deletedId}`);
         if (!old) continue;
         deletedMessageCache.delete(`${deletedChat}:${deletedId}`);
@@ -488,8 +488,7 @@ async function recoverDeletedMessage(sock, sessionId, deletedKey, deleteUpdate =
   const deletedChat = deletedKey?.remoteJid;
   const deletedId = deletedKey?.id;
   if (!deletedChat || !deletedId) return;
-  const scope = deletedChat.endsWith("@g.us") ? deletedChat : sessionId;
-  if (!getToggles(scope).antidelete) return;
+  if (!getToggles(sessionId).antidelete) return;
   const cacheKey = `${deletedChat}:${deletedId}`;
   const old = deletedMessageCache.get(cacheKey);
   if (!old) return;
@@ -794,11 +793,14 @@ async function handleMessage(sock, msg, sessionId) {
       }
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
-      const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
+      const ownerSpecial = controller && OWNER_ONLY_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
     }
 
-    const commandControlExempt = new Set(["welcome", "goodbye", ...ANTI_LIST, ...AUTO_LIST]);
+    const commandControlExempt = new Set([
+      "song", "setgrouppp", "welcome", "goodbye", "song2", "video", "tagall", "tag",
+      ...ANTI_LIST, ...AUTO_LIST,
+    ]);
     if (!commandControlExempt.has(normalizedCommand) && !isCommandEnabled(commandScope, normalizedCommand)) {
       // Non-owner users must remain completely silent while commands are OFF.
       if (!controller) return;
@@ -903,7 +905,15 @@ ${lines.join("\n")}`;
     text: heading, mentions,
   });
 });
-mk("tag", async (p) => commands.get("tagall").run(p));
+mk("tag", async ({ sock, from, msg, args }) => {
+  const target = getTargetJid(msg, args, null);
+  if (!target) return sock.sendMessage(from, { text: "❌ Reply to or mention one member with .tag" });
+  const text = args.filter((arg) => !/^\d{5,}$/.test(arg)).join(" ") || "📢 Attention";
+  await sock.sendMessage(from, {
+    text: `${text}\n\n👤 @${target.split("@")[0]}`,
+    mentions: [target],
+  });
+});
 mk("hidetag", async ({ sock, from, args }) => {
   const md = await sock.groupMetadata(from);
   await sock.sendMessage(from, { text: args.join(" ") || " ", mentions: md.participants.map((p) => p.id) });
@@ -948,8 +958,22 @@ mk("delgrouppp", async ({ sock, from }) => {
   await sock.sendMessage(from, { text: "🗑️ Group PP deleted" });
 });
 mk("setgrouppp", async ({ sock, from, msg }) => {
-  if (!msg.message?.imageMessage) return sock.sendMessage(from, { text: "❌ Reply to an image with .setgrouppp" });
-  const buf = await downloadMedia(sock, msg);
+  const current = unwrapMessage(msg?.message);
+  const quoted = current?.extendedTextMessage?.contextInfo?.quotedMessage ||
+    current?.imageMessage?.contextInfo?.quotedMessage ||
+    current?.videoMessage?.contextInfo?.quotedMessage;
+  const directImage = current?.imageMessage;
+  const quotedImage = unwrapMessage(quoted)?.imageMessage;
+  if (!directImage && !quotedImage) return sock.sendMessage(from, { text: "❌ Send an image or reply to an image with .setgrouppp" });
+  const mediaMessage = directImage ? msg : {
+    key: {
+      remoteJid: from,
+      id: current?.extendedTextMessage?.contextInfo?.stanzaId || `quoted-${Date.now()}`,
+      participant: current?.extendedTextMessage?.contextInfo?.participant,
+    },
+    message: quoted,
+  };
+  const buf = await downloadMedia(sock, mediaMessage);
   await sock.updateProfilePicture(from, buf);
   await sock.sendMessage(from, { text: "✅ Group PP updated" });
 });
@@ -982,14 +1006,17 @@ for (const name of ANTI_LIST) {
   register(name, {
     toggle: null,
     run: async ({ sock, from, args, sessionId }) => {
+      const scope = name === "antidelete"
+        ? sessionId
+        : (from.endsWith("@g.us") ? from : sessionId);
       if (!args[0]) {
-        const t = getToggles(from.endsWith("@g.us") ? from : sessionId);
+        const t = getToggles(scope);
         return sock.sendMessage(from, {
           text: styledToggleReply(name, t[name], `Usage: .${name} on/off`),
         });
       }
-      const ok = setToggle(from.endsWith("@g.us") ? from : sessionId, name, args[0]);
-      await sock.sendMessage(from, { text: ok ? styledToggleReply(name, getToggles(from.endsWith("@g.us") ? from : sessionId)[name], "Updated") : styledToggleReply(name, false, "Unknown toggle") });
+      const ok = setToggle(scope, name, args[0]);
+      await sock.sendMessage(from, { text: ok ? styledToggleReply(name, getToggles(scope)[name], "Updated") : styledToggleReply(name, false, "Unknown toggle") });
     },
   });
 }

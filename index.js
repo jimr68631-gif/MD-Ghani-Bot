@@ -963,16 +963,25 @@ async function resolveYouTube(input) {
 }
 mk("movie", async ({ sock, from, args }) => {
   const input = args.join(" ").trim();
-  if (!input) return sock.sendMessage(from, { text: "Usage: .movie <authorized/public-domain video URL>" });
-  if (!ytdl.validateURL(input) && !/^https?:\/\//i.test(input)) {
-    return sock.sendMessage(from, { text: "❌ Please send an authorized/public-domain video URL. Movie-title searching does not download full movies." });
-  }
-  try {
-    const media = await downloadWithYtDlp(input, "video");
-    await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title || "Movie video"}` });
-  } catch (error) {
-    throw new Error(`Movie download failed: ${error?.message || "source unavailable"}`);
-  }
+  if (!input) return sock.sendMessage(from, { text: "Usage: .movie <movie title>" });
+  const result = await ytSearch(`${input} official trailer`);
+  const trailer = result.videos?.[0];
+  const q = encodeURIComponent(input);
+  const text = `╭━━━❰ *MOVIE SEARCH* ❱━━━╮
+┃ 🎬 Title: *${input}*
+╰━━━━━━━━━━━━━━━━━━━━╯
+${trailer ? `
+▶️ *Official Trailer*
+${trailer.title}
+${trailer.url}` : "\n▶️ Official trailer not found"}
+
+🔎 *Legal streaming availability*
+JustWatch: https://www.justwatch.com/us/search?q=${q}
+Google Play Movies: https://play.google.com/store/search?q=${q}&c=movies
+Apple TV: https://tv.apple.com/us/search?term=${q}
+
+ℹ️ Availability and pricing depend on your country. Full copyrighted movie files are not downloaded.`;
+  await sock.sendMessage(from, { text });
 });
 async function downloadWithYtDlp(input, kind) {
   const url = await resolveYouTube(input);

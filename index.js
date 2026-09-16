@@ -116,7 +116,7 @@ const config = {
 
 const defaultToggles = {
   antibadword: false, antibot: false, antibug: false, anticontact: false,
-  antidelete: false, antidemote: false, antipromote: false, antidocument: false,
+  antidelete: true, antidemote: false, antipromote: false, antidocument: false,
   antiedit: false, antiforward: false, antigif: false, antiimage: false,
   antilink: false, antilocation: false, antimessage: false, antipoll: false,
   antistatus: false, antisticker: false, antitag: false, antitagadmin: false,
@@ -345,19 +345,25 @@ function wireHandlers(sessionId) {
   sock.ev.on("messages.update", async (updates) => {
     const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
     for (const item of updates || []) {
-      if (!item.update?.message && item.key?.remoteJid && item.key?.id && getToggles(item.key.remoteJid.endsWith("@g.us") ? item.key.remoteJid : sessionId).antidelete) {
-        const old = deletedMessageCache.get(`${item.key.remoteJid}:${item.key.id}`);
+      const revoke = item.update?.message?.protocolMessage?.type === 0;
+      const deletedKey = item.update?.message?.protocolMessage?.key || item.key;
+      const deletedChat = deletedKey?.remoteJid;
+      const deletedId = deletedKey?.id;
+      if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(deletedChat.endsWith("@g.us") ? deletedChat : sessionId).antidelete) {
+        const old = deletedMessageCache.get(`${deletedChat}:${deletedId}`);
         if (!old) continue;
+        deletedMessageCache.delete(`${deletedChat}:${deletedId}`);
         const oldMessage = unwrapMessage(old.message);
-        const source = item.key.remoteJid;
+        const source = deletedChat;
         const originalSender = old.key?.participant || old.key?.remoteJid || "Unknown";
-        const deletedBy = item.key.participant || item.key.remoteJid || "Unknown";
+        const deletedBy = item.key?.participant || item.key?.remoteJid || "Unknown";
         const clean = (jid) => String(jid).split("@")[0].split(":")[0];
         const isGroup = source.endsWith("@g.us");
+        const isChannel = source.endsWith("@newsletter") || source === "status@broadcast";
         const cachedGroup = isGroup ? groupMetadataCache.get(source) : null;
         const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
           ? cachedGroup.data.subject
-          : (isGroup ? "WhatsApp Group" : "Private Chat");
+          : (isChannel ? "WhatsApp Channel/Status" : (isGroup ? "WhatsApp Group" : "Personal Inbox"));
         const type = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
           oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
           oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document" : "Media/Other";

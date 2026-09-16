@@ -1380,11 +1380,15 @@ mk("link", async ({ sock, from }) => {
   const md = await sock.groupMetadata(from);
   const invite = `https://chat.whatsapp.com/${code}`;
   const caption = `🔗 *${md.subject || "Group Invite"}*\n${invite}`;
+  const viewGroupButton = [{
+    index: 1,
+    urlButton: { displayText: "View Group", url: invite },
+  }];
   try {
     const dp = await sock.profilePictureUrl(from, "image");
-    await sock.sendMessage(from, { image: { url: dp }, caption });
+    await sock.sendMessage(from, { image: { url: dp }, caption, templateButtons: viewGroupButton });
   } catch {
-    await sock.sendMessage(from, { text: caption });
+    await sock.sendMessage(from, { text: caption, templateButtons: viewGroupButton });
   }
 });
 

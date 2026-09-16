@@ -165,6 +165,18 @@ const formatGroupMessage = (template, groupName, user, count) => String(template
   .replaceAll("{group}", groupName)
   .replaceAll("{user}", `@${user.split("@")[0]}`)
   .replaceAll("{count}", String(count));
+async function resolveOriginalJid(sock, jid) {
+  if (!jid || !String(jid).endsWith("@lid")) return jid;
+  for (const method of ["getPNForLID", "getPnForLid", "getPhoneNumberForLID"]) {
+    if (typeof sock?.[method] !== "function") continue;
+    try {
+      const result = await sock[method](jid);
+      const value = typeof result === "string" ? result : result?.jid || result?.phoneNumber;
+      if (value) return String(value).includes("@") ? value : `${String(value).replace(/\D/g, "")}@s.whatsapp.net`;
+    } catch {}
+  }
+  return jid;
+}
 const getToggles = (id) => {
   if (!toggleState.has(id)) toggleState.set(id, { ...defaultToggles });
   return toggleState.get(id);
@@ -358,8 +370,8 @@ function wireHandlers(sessionId) {
         deletedMessageCache.delete(`${deletedChat}:${deletedId}`);
         const oldMessage = unwrapMessage(old.message);
         const source = deletedChat;
-        const originalSender = old.key?.participant || old.key?.remoteJid || "Unknown";
-        const deletedBy = item.key?.participant || item.key?.remoteJid || "Unknown";
+        const originalSender = await resolveOriginalJid(sock, old.key?.participantAlt || old.key?.participant || old.key?.remoteJid || "Unknown");
+        const deletedBy = await resolveOriginalJid(sock, item.key?.participantAlt || item.key?.participant || item.key?.remoteJid || "Unknown");
         const clean = (jid) => String(jid).split("@")[0].split(":")[0];
         const isGroup = source.endsWith("@g.us");
         const isChannel = source.endsWith("@newsletter") || source === "status@broadcast";
@@ -367,7 +379,8 @@ function wireHandlers(sessionId) {
         const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
           ? cachedGroup.data.subject
           : (isChannel ? "WhatsApp Channel/Status" : (isGroup ? "WhatsApp Group" : "Personal Inbox"));
-        const type = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
+        const type = source === "status@broadcast" || source.endsWith("@newsletter") ? "STATUS" :
+          oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
           oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
           oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document" : "Media/Other";
         const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || "";
@@ -675,7 +688,7 @@ function getTargetJid(msg, args = [], fallback = null) {
   const ctx = message?.extendedTextMessage?.contextInfo ||
     message?.imageMessage?.contextInfo ||
     message?.videoMessage?.contextInfo || {};
-  const target = ctx.participant || ctx.mentionedJid?.[0];
+  const target = ctx.participantAlt || ctx.participant || ctx.mentionedJid?.[0];
   if (target) return target;
   const number = String(args[0] || "").replace(/\D/g, "");
   return number ? `${number}@s.whatsapp.net` : fallback;
@@ -1377,11 +1390,12 @@ register("setgoodbye", { toggle: null, run: async ({ sock, from, args }) => {
   settings.goodbye = `${message} {user} from {group}. You are member #{count}.`;
   await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nOrder: message → user → group name → You are member #count` });
 }});
-register("welcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
+register("welcome", { toggle: null, run: async ({ sock, from, msg, args, sessionId }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   const settings = getGroupMessageSettings(from);
   const mode = String(args[0] || "").toLowerCase();
   if (["on", "off"].includes(mode)) {
+    if (!isController(sock, from, msg, sessionId)) return sock.sendMessage(from, { text: "🚫 Only the bot owner can change welcome ON/OFF." });
     settings.welcomeEnabled = mode === "on";
     return sock.sendMessage(from, { text: styledToggleReply("welcome", settings.welcomeEnabled, "Automatic messages updated for this group") });
   }
@@ -1393,11 +1407,12 @@ register("welcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
   const text = formatGroupMessage(settings.welcome, md.subject || "Group", user, md.participants.length);
   await sock.sendMessage(from, { text, mentions: [user] });
 }});
-register("goodbye", { toggle: null, run: async ({ sock, from, msg, args }) => {
+register("goodbye", { toggle: null, run: async ({ sock, from, msg, args, sessionId }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   const settings = getGroupMessageSettings(from);
   const mode = String(args[0] || "").toLowerCase();
   if (["on", "off"].includes(mode)) {
+    if (!isController(sock, from, msg, sessionId)) return sock.sendMessage(from, { text: "🚫 Only the bot owner can change goodbye ON/OFF." });
     settings.goodbyeEnabled = mode === "on";
     return sock.sendMessage(from, { text: styledToggleReply("goodbye", settings.goodbyeEnabled, "Automatic messages updated for this group") });
   }
@@ -1426,7 +1441,7 @@ register("getid", { toggle: null, run: async ({ sock, from, msg }) => {
   await sock.sendMessage(from, { text: `🆔 ${t}` });
 }});
 register("profile", { toggle: null, run: async ({ sock, from, msg, args }) => {
-  const t = getTargetJid(msg, args, msg?.key?.participant || from);
+  const t = await resolveOriginalJid(sock, getTargetJid(msg, args, msg?.key?.participant || from));
   const clean = String(t).split(":")[0].split("@")[0];
   let name = `+${clean}`;
   let admin = "Private chat";

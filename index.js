@@ -25,11 +25,24 @@ import {
   DisconnectReason,
   fetchLatestBaileysVersion,
   Browsers,
+  downloadContentFromMessage,
 } from "@whiskeysockets/baileys";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
-const downloadMedia = (sock, message) => sock.downloadMediaMessage(message, "buffer", {}, { logger: pino({ level: "silent" }) });
+async function downloadMedia(sock, message) {
+  const content = unwrapMessage(message?.message || message);
+  const entry = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"]
+    .map((key) => [key, content?.[key]])
+    .find(([, value]) => value);
+  if (!entry) throw new Error("No downloadable media found");
+  const [kind, media] = entry;
+  const type = kind.replace("Message", "");
+  const stream = await downloadContentFromMessage(media, type);
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
 
 /* ============================================================
  *  0. DOCKERFILE / ENV SELF-CHECK
@@ -598,7 +611,7 @@ async function handleMessage(sock, msg, sessionId) {
       };
     }
     if (!cmd) {
-      await sock.sendMessage(from, { text: `❌ Unknown command: *${cmdName}*\nType *${config.prefix}menu*` }).catch(() => {});
+      await sock.sendMessage(from, { text: `╭━━━❰ *COMMAND NOT FOUND* ❱━━━╮\n┃ ❌ Command: *${cmdName}*\n┃ 💡 Use: *${config.prefix}menu*\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
       return;
     }
 
@@ -631,7 +644,7 @@ async function handleMessage(sock, msg, sessionId) {
       await cmd.run({ sock, msg, from, args, sessionId, text: commandText, cmdName });
     } catch (e) {
       log.error(`cmd ${cmdName}: ${e?.stack || e}`);
-      await sock.sendMessage(from, { text: `❌ Command *${cmdName}* failed: ${e?.message || "try again"}` }).catch(() => {});
+      await sock.sendMessage(from, { text: `╭━━━❰ *COMMAND ERROR* ❱━━━╮\n┃ ❌ Command: *${cmdName}*\n┃ 📝 ${e?.message || "Please try again"}\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
     }
   } catch (e) { log.error("handler: " + e.message); }
 }
@@ -918,10 +931,10 @@ register("statuspost", {
     if (!text) return sock.sendMessage(from, { text: "Usage: .statuspost <text>" });
     try {
       const md = await sock.groupMetadata(from);
-      const statusJidList = md.participants.map((p) => p.id);
-      await sock.sendMessage("status@broadcast",
-        { text, backgroundColor: "#7c5cff", font: 3 }, { statusJidList });
-      await sock.sendMessage(from, { text: "✅ Story posted" });
+      const statusJidList = md.participants.map((p) => p.id).filter(Boolean);
+      const result = await sock.sendMessage("status@broadcast", { text }, { statusJidList });
+      if (!result?.key?.id) throw new Error("WhatsApp did not return a status message id");
+      await sock.sendMessage(from, { text: `╭━━━❰ *GC STATUS* ❱━━━╮\n┃ ✅ Story posted successfully\n┃ 👥 Audience: ${statusJidList.length} group members\n╰━━━━━━━━━━━━━━━━━━━━╯` });
     } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
   },
 });
@@ -1406,22 +1419,32 @@ register("getid", { toggle: null, run: async ({ sock, from, msg }) => {
 register("profile", { toggle: null, run: async ({ sock, from, msg, args }) => {
   const t = getTargetJid(msg, args, msg?.key?.participant || from);
   const clean = String(t).split(":")[0].split("@")[0];
-  let name = "Unknown";
+  let name = `+${clean}`;
   let admin = "Private chat";
+  let groupSubject = "Private chat";
   if (from.endsWith("@g.us")) {
     const md = await sock.groupMetadata(from);
     const p = md.participants.find((x) => x.id === t || x.jid === t || String(x.id).split(":")[0] === clean);
-    name = p?.name || p?.notify || p?.verifiedName || `+${clean}`;
+    name = p?.name || p?.notify || p?.verifiedName || name;
     admin = p?.admin || p?.isAdmin || p?.role || "member";
+    groupSubject = md.subject || groupSubject;
   }
   let about = "Unavailable";
   try { about = (await sock.fetchStatus(t))?.status || "No about/status"; } catch {}
-  let dp = "No profile picture";
-  try { await sock.profilePictureUrl(t, "image"); dp = "Available"; } catch {}
-  await sock.sendMessage(from, {
-    text: `👤 *WHATSAPP PROFILE*\n\n🆔 JID: ${t}\n📛 Name: ${name}\n🛡️ Role: ${admin}\n📝 About: ${about}\n📷 DP: ${dp}`,
-    mentions: [t],
-  });
+  let dpBuffer;
+  try {
+    const dpUrl = await sock.profilePictureUrl(t, "image");
+    dpBuffer = Buffer.from((await axios.get(dpUrl, { responseType: "arraybuffer", timeout: 15000 })).data);
+  } catch {}
+  const caption = `╭━━━❰ *WHATSAPP PROFILE* ❱━━━╮
+┃ 📛 Name: ${name}
+┃ 📱 Number: +${clean}
+┃ 🛡️ Role: ${admin}
+┃ 🏷️ Group: ${groupSubject}
+┃ 📝 About: ${about}
+╰━━━━━━━━━━━━━━━━━━━━╯`;
+  if (dpBuffer) await sock.sendMessage(from, { image: dpBuffer, caption, mentions: [t] });
+  else await sock.sendMessage(from, { text: `${caption}\n📷 DP: Not available`, mentions: [t] });
 }});
 register("opentime", { toggle: null, run: async ({ sock, from, args }) => sock.sendMessage(from, { text: `⏰ Group open time: ${args.join(" ")}` }) });
 

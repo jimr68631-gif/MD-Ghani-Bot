@@ -179,6 +179,9 @@ const isOn = (id, key) => !!getToggles(id)[key];
 const commandKey = (group, name) => `${group}:${String(name).toLowerCase()}`;
 const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) !== false;
 const setCommandEnabled = (group, name, enabled) => enabledCommandState.set(commandKey(group, name), enabled);
+const styledToggleReply = (name, enabled, detail = "") => `╭━━━❰ *${String(name).toUpperCase()}* ❱━━━╮
+┃ ${enabled ? "🟢 Status: ON ✅" : "🔴 Status: OFF ❌"}
+${detail ? `┃ 📝 ${detail}\n` : ""}╰━━━━━━━━━━━━━━━━━━━━╯`;
 
 /* ============================================================
  *  4. COMMAND REGISTRY + SESSIONS
@@ -636,13 +639,13 @@ async function handleMessage(sock, msg, sessionId) {
       if (!(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
       const configurable = ANTI_LIST?.includes(normalizedCommand) || AUTO_LIST?.includes(normalizedCommand) || ["enable", "disable", "enabled", "enabledcommands", "botstatus", "warn", "set"].includes(normalizedCommand);
       if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
-        return sock.sendMessage(from, { text: `⚠️ *${normalizedCommand}* is OFF in this group. An admin must enable it with *.enable ${normalizedCommand}*` });
+        return sock.sendMessage(from, { text: `${styledToggleReply(normalizedCommand, false, `Admin can enable with .enable ${normalizedCommand}`)}` });
       }
     }
 
     if (cmd.toggle && !isOn(sessionId, cmd.toggle)) {
       return sock.sendMessage(from, {
-        text: `⚠️ *${cmdName}* is OFF. Enable: .${cmdName} on`,
+        text: styledToggleReply(cmdName, false, `Enable with .${cmdName} on`),
       });
     }
 
@@ -795,9 +798,9 @@ for (const name of AUTO_LIST) {
     run: async ({ sock, from, msg, args }) => {
       if (!(await requireGroupAdmin(sock, from, msg))) return;
       const scope = from.endsWith("@g.us") ? from : from;
-      if (!args[0]) return sock.sendMessage(from, { text: `📌 *${name}* = ${getToggles(scope)[name] ? "ON ✅" : "OFF ❌"}\nUsage: .${name} on/off` });
+      if (!args[0]) return sock.sendMessage(from, { text: `${styledToggleReply(name, getToggles(scope)[name], `Usage: .${name} on/off`)}` });
       setToggle(scope, name, args[0]);
-      await sock.sendMessage(from, { text: `✅ *${name}* = ${getToggles(scope)[name] ? "ON" : "OFF"} for this group` });
+      await sock.sendMessage(from, { text: styledToggleReply(name, getToggles(scope)[name], "Updated for this group") });
     },
   });
 }
@@ -808,11 +811,11 @@ for (const name of ANTI_LIST) {
       if (!args[0]) {
         const t = getToggles(from.endsWith("@g.us") ? from : sessionId);
         return sock.sendMessage(from, {
-          text: `📌 *${name}* = ${t[name] ? "ON ✅" : "OFF ❌"}\nUsage: .${name} on/off`,
+          text: styledToggleReply(name, t[name], `Usage: .${name} on/off`),
         });
       }
       const ok = setToggle(from.endsWith("@g.us") ? from : sessionId, name, args[0]);
-      await sock.sendMessage(from, { text: ok ? `✅ *${name}* = ${args[0].toUpperCase()}` : `❌ Unknown toggle` });
+      await sock.sendMessage(from, { text: ok ? styledToggleReply(name, getToggles(from.endsWith("@g.us") ? from : sessionId)[name], "Updated") : styledToggleReply(name, false, "Unknown toggle") });
     },
   });
 }
@@ -824,18 +827,18 @@ register("antilink", {
     if (!mode) {
       const enabled = getToggles(from).antilink;
       const action = antilinkActionState.get(from) || "delete";
-      return sock.sendMessage(from, { text: `🔗 Antilink: ${enabled ? "ON ✅" : "OFF ❌"}\nAction: ${action}\nUse: .antilink on | off | kick | delete` });
+      return sock.sendMessage(from, { text: styledToggleReply("antilink", enabled, `Action: ${action} | Use: .antilink on/off/kick/delete`) });
     }
     if (mode === "kick" || mode === "delete") {
       antilinkActionState.set(from, mode);
       setToggle(from, "antilink", true);
-      return sock.sendMessage(from, { text: `✅ Antilink ON\nAction: ${mode}\nLinks will be deleted immediately${mode === "kick" ? " and the sender will be removed." : "."}` });
+      return sock.sendMessage(from, { text: styledToggleReply("antilink", true, `Action: ${mode} | Links will be deleted immediately`) });
     }
     if (mode === "on" || mode === "off") {
       setToggle(from, "antilink", mode);
-      return sock.sendMessage(from, { text: `✅ Antilink ${mode.toUpperCase()}` });
+      return sock.sendMessage(from, { text: styledToggleReply("antilink", mode === "on", "Updated") });
     }
-    await sock.sendMessage(from, { text: "Usage: .antilink on | off | kick | delete" });
+    await sock.sendMessage(from, { text: styledToggleReply("antilink", false, "Usage: .antilink on/off/kick/delete") });
   },
 });
 register("autostatuslinkkick", {
@@ -843,18 +846,18 @@ register("autostatuslinkkick", {
   run: async ({ sock, from, args, sessionId }) => {
     if (!args[0]) {
       const t = getToggles(sessionId);
-      return sock.sendMessage(from, { text: `📌 autostatuslinkkick = ${t.antistatuslinkkick ? "ON" : "OFF"}` });
+      return sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", t.antistatuslinkkick, "Use: .autostatuslinkkick on/off") });
     }
     setToggle(sessionId, "antistatuslinkkick", args[0]);
-    await sock.sendMessage(from, { text: `✅ autostatuslinkkick set` });
+    await sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", getToggles(sessionId).antistatuslinkkick, "Updated") });
   },
 });
 register("set", {
   toggle: null,
   run: async ({ sock, from, args, sessionId }) => {
-    if (args.length < 2) return sock.sendMessage(from, { text: "Usage: .set <key> on/off" });
+    if (args.length < 2) return sock.sendMessage(from, { text: styledToggleReply(args[0] || "SET", false, "Usage: .set <key> on/off") });
     const ok = setToggle(sessionId, args[0], args[1]);
-    await sock.sendMessage(from, { text: ok ? `✅ ${args[0]} = ${args[1]}` : `❌ Unknown key: ${args[0]}` });
+    await sock.sendMessage(from, { text: ok ? styledToggleReply(args[0], getToggles(sessionId)[args[0]], "Updated") : styledToggleReply(args[0], false, "Unknown toggle") });
   },
 });
 register("enable", {
@@ -862,9 +865,9 @@ register("enable", {
   run: async ({ sock, from, msg, args }) => {
     if (!(await requireGroupAdmin(sock, from, msg))) return;
     const name = String(args[0] || "").toLowerCase();
-    if (!commands.has(name) || ["menu", "help", "enable", "disable"].includes(name)) return sock.sendMessage(from, { text: "❌ Command not found. Use .menu to view commands." });
+    if (!commands.has(name) || ["menu", "help", "enable", "disable"].includes(name)) return sock.sendMessage(from, { text: styledToggleReply(name || "COMMAND", false, "Command not found. Use .menu") });
     setCommandEnabled(from, name, true);
-    await sock.sendMessage(from, { text: `✅ *${name}* is now ON for this group.` });
+    await sock.sendMessage(from, { text: styledToggleReply(name, true, "Enabled for this group") });
   },
 });
 register("disable", {
@@ -872,9 +875,9 @@ register("disable", {
   run: async ({ sock, from, msg, args }) => {
     if (!(await requireGroupAdmin(sock, from, msg))) return;
     const name = String(args[0] || "").toLowerCase();
-    if (!commands.has(name)) return sock.sendMessage(from, { text: "❌ Command not found." });
+    if (!commands.has(name)) return sock.sendMessage(from, { text: styledToggleReply(name || "COMMAND", false, "Command not found") });
     setCommandEnabled(from, name, false);
-    await sock.sendMessage(from, { text: `✅ *${name}* is now OFF for this group.` });
+    await sock.sendMessage(from, { text: styledToggleReply(name, false, "Disabled for this group") });
   },
 });
 register("enabled", {
@@ -1278,8 +1281,8 @@ const mkOwner = (n, fn) => register(n, {
   },
 });
 mkOwner("mode", async ({ sock, from, args }) => sock.sendMessage(from, { text: `⚙️ Mode: *${args[0] || "public"}*` }));
-mkOwner("public", async ({ sock, from }) => sock.sendMessage(from, { text: "🌍 Public mode ON" }));
-mkOwner("private", async ({ sock, from }) => sock.sendMessage(from, { text: "🔒 Private mode ON" }));
+mkOwner("public", async ({ sock, from }) => sock.sendMessage(from, { text: styledToggleReply("public mode", true, "Bot is available to users") }));
+mkOwner("private", async ({ sock, from }) => sock.sendMessage(from, { text: styledToggleReply("private mode", true, "Bot is restricted") }));
 mkOwner("approve", async ({ sock, from, msg }) => {
   const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
   if (t) await sock.sendMessage(from, { text: `✅ @${t.split("@")[0]} approved`, mentions: [t] });
@@ -1318,7 +1321,7 @@ mkOwner("save", async ({ sock, from }) => sock.sendMessage(from, { text: "💾 S
 mkOwner("owner", async ({ sock, from }) => sock.sendMessage(from, { text: `👑 Owner: ${config.owner.map((o) => "+" + o.split("@")[0]).join(", ")}` }));
 mkOwner("alwaysonline", async ({ sock, from, args, sessionId }) => {
   if (args[0]) setToggle(sessionId, "alwaysonline", args[0]);
-  await sock.sendMessage(from, { text: `✅ alwaysonline = ${getToggles(sessionId).alwaysonline ? "ON" : "OFF"}` });
+  await sock.sendMessage(from, { text: styledToggleReply("alwaysonline", getToggles(sessionId).alwaysonline, "Updated") });
 });
 mkOwner("warn", async ({ sock, from, msg }) => {
   const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
@@ -1380,10 +1383,10 @@ register("welcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
   const mode = String(args[0] || "").toLowerCase();
   if (["on", "off"].includes(mode)) {
     settings.welcomeEnabled = mode === "on";
-    return sock.sendMessage(from, { text: `✅ Welcome messages are now ${settings.welcomeEnabled ? "ON" : "OFF"} for this group.` });
+    return sock.sendMessage(from, { text: styledToggleReply("welcome", settings.welcomeEnabled, "Automatic messages updated for this group") });
   }
   if (["status", "state"].includes(mode)) {
-    return sock.sendMessage(from, { text: `📌 Welcome messages: ${settings.welcomeEnabled ? "ON ✅" : "OFF ❌"}` });
+    return sock.sendMessage(from, { text: styledToggleReply("welcome", settings.welcomeEnabled, "Use .welcome on/off") });
   }
   const md = await sock.groupMetadata(from);
   const user = msg.key?.participant || from;
@@ -1396,10 +1399,10 @@ register("goodbye", { toggle: null, run: async ({ sock, from, msg, args }) => {
   const mode = String(args[0] || "").toLowerCase();
   if (["on", "off"].includes(mode)) {
     settings.goodbyeEnabled = mode === "on";
-    return sock.sendMessage(from, { text: `✅ Goodbye messages are now ${settings.goodbyeEnabled ? "ON" : "OFF"} for this group.` });
+    return sock.sendMessage(from, { text: styledToggleReply("goodbye", settings.goodbyeEnabled, "Automatic messages updated for this group") });
   }
   if (["status", "state"].includes(mode)) {
-    return sock.sendMessage(from, { text: `📌 Goodbye messages: ${settings.goodbyeEnabled ? "ON ✅" : "OFF ❌"}` });
+    return sock.sendMessage(from, { text: styledToggleReply("goodbye", settings.goodbyeEnabled, "Use .goodbye on/off") });
   }
   const md = await sock.groupMetadata(from);
   const user = msg.key?.participant || from;

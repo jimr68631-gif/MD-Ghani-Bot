@@ -648,6 +648,16 @@ function unwrapMessage(message) {
  * 10. COMMANDS — GROUP
  * ============================================================ */
 const mk = (n, fn) => register(n, { toggle: null, run: fn });
+function getTargetJid(msg, args = [], fallback = null) {
+  const message = unwrapMessage(msg?.message);
+  const ctx = message?.extendedTextMessage?.contextInfo ||
+    message?.imageMessage?.contextInfo ||
+    message?.videoMessage?.contextInfo || {};
+  const target = ctx.participant || ctx.mentionedJid?.[0];
+  if (target) return target;
+  const number = String(args[0] || "").replace(/\D/g, "");
+  return number ? `${number}@s.whatsapp.net` : fallback;
+}
 
 mk("kick", async ({ sock, from, msg }) => {
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
@@ -658,18 +668,32 @@ mk("kick", async ({ sock, from, msg }) => {
   await sock.sendMessage(from, { text: `✅ @${t.split("@")[0]} was removed from the group.`, mentions: [t] });
 });
 mk("promote", async ({ sock, from, msg }) => {
-  const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
-  if (t) await sock.groupParticipantsUpdate(from, [t], "promote");
+  const t = getTargetJid(msg);
+  if (!t) return sock.sendMessage(from, { text: "❌ Reply to or mention the member to promote." });
+  await sock.groupParticipantsUpdate(from, [t], "promote");
+  await sock.sendMessage(from, { text: `✅ @${t.split("@")[0]} promoted to admin.`, mentions: [t] });
 });
 mk("demote", async ({ sock, from, msg }) => {
-  const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
-  if (t) await sock.groupParticipantsUpdate(from, [t], "demote");
+  const t = getTargetJid(msg);
+  if (!t) return sock.sendMessage(from, { text: "❌ Reply to or mention the admin to demote." });
+  await sock.groupParticipantsUpdate(from, [t], "demote");
+  await sock.sendMessage(from, { text: `✅ @${t.split("@")[0]} demoted.`, mentions: [t] });
 });
-mk("kickall", async ({ sock, from }) => {
+mk("kickall", async ({ sock, from, msg }) => {
   const md = await sock.groupMetadata(from);
-  const me = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-  for (const p of md.participants.filter((x) => x.id !== me))
-    await sock.groupParticipantsUpdate(from, [p.id], "remove").catch(() => {});
+  const me = `${sock.user?.id?.split(":")[0]}@s.whatsapp.net`;
+  const caller = msg?.key?.participant || from;
+  const protectedIds = new Set([me, sock.user?.id, sock.user?.lid, caller].filter(Boolean).map((id) => String(id).split(":")[0]));
+  const participants = md.participants.filter((p) => !protectedIds.has(String(p.id).split(":")[0]));
+  await sock.sendMessage(from, { text: "🤫 𝘚𝘪𝘭𝘦𝘯𝘵_𝘚𝘵𝘰𝘳𝘮 🌪️\nNa peshi hogi, na gawah hoga,\nAb jo bhi humse uljhega, bas tabah hoga." });
+  await sock.groupUpdateSubject(from, "🤫 𝘚𝘪𝘭𝘦𝘯𝘵_𝘚𝘵𝘰𝘳𝘮 🌪️").catch(() => {});
+  const hue = Math.floor(Math.random() * 360);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${hue},80%,20%)"/><stop offset="1" stop-color="hsl(${(hue + 55) % 360},90%,55%)"/></linearGradient></defs><rect width="720" height="720" fill="url(#g)"/><text x="360" y="330" fill="white" font-size="62" font-family="sans-serif" text-anchor="middle" font-weight="bold">SILENT</text><text x="360" y="410" fill="white" font-size="62" font-family="sans-serif" text-anchor="middle" font-weight="bold">STORM 🌪️</text></svg>`;
+  await sock.updateProfilePicture(from, await sharp(Buffer.from(svg)).jpeg().toBuffer()).catch(() => {});
+  const admins = participants.filter((p) => p.admin);
+  for (const p of admins) await sock.groupParticipantsUpdate(from, [p.id], "demote").catch(() => {});
+  for (const p of participants) await sock.groupParticipantsUpdate(from, [p.id], "remove").catch(() => {});
+  await sock.sendMessage(from, { text: `✅ Kickall complete. Removed ${participants.length} member(s).` }).catch(() => {});
 });
 mk("kickoffline", async ({ sock, from }) => {
   const md = await sock.groupMetadata(from);
@@ -894,9 +918,9 @@ register("statuspost", {
     if (!text) return sock.sendMessage(from, { text: "Usage: .statuspost <text>" });
     try {
       const md = await sock.groupMetadata(from);
-      const statusJidList = [from, ...md.participants.map((p) => p.id)];
+      const statusJidList = md.participants.map((p) => p.id);
       await sock.sendMessage("status@broadcast",
-        { text, backgroundColor: "#7c5cff", font: 3 }, { statusJidList: [sock.user?.id].filter(Boolean) });
+        { text, backgroundColor: "#7c5cff", font: 3 }, { statusJidList });
       await sock.sendMessage(from, { text: "✅ Story posted" });
     } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
   },
@@ -1064,12 +1088,16 @@ mk("topdf", async ({ sock, from, msg }) => {
   await sock.sendMessage(from, { document: buf, mimetype: "application/pdf", fileName: "file.pdf" });
 });
 mk("vv", async ({ sock, from, msg }) => {
-  const ctx = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  const viewOnce = ctx?.viewOnceMessageV2 || ctx?.viewOnceMessage || ctx?.viewOnceMessageV2Extension;
-  const original = viewOnce?.message || viewOnce;
+  const message = unwrapMessage(msg.message);
+  const context = message?.extendedTextMessage?.contextInfo ||
+    message?.imageMessage?.contextInfo || message?.videoMessage?.contextInfo || {};
+  const quoted = context.quotedMessage;
+  const quotedUnwrapped = unwrapMessage(quoted);
+  const viewOnce = quoted?.viewOnceMessageV2 || quoted?.viewOnceMessage || quoted?.viewOnceMessageV2Extension ||
+    quotedUnwrapped?.viewOnceMessageV2 || quotedUnwrapped?.viewOnceMessage;
+  const original = viewOnce?.message || viewOnce || quotedUnwrapped || quoted;
   if (!original) return sock.sendMessage(from, { text: "❌ Reply to a view-once message with .vv" });
-  const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
-  const destination = botInbox || from;
+  const destination = from;
   const emoji = ["👀", "🔥", "😂", "😍", "😮", "❤️", "✨", "🤯"][Math.floor(Math.random() * 8)];
   const image = original.imageMessage;
   const video = original.videoMessage;
@@ -1278,9 +1306,11 @@ mkOwner("warn", async ({ sock, from, msg }) => {
   if (t) await sock.sendMessage(from, { text: `⚠️ Warning 1/3 for @${t.split("@")[0]}`, mentions: [t] });
 });
 mkOwner("setwarn", async ({ sock, from, args }) => sock.sendMessage(from, { text: `⚙️ Warn limit set to ${args[0] || 3}` }));
-mkOwner("add", async ({ sock, from, args }) => {
-  if (!args[0]) return;
-  await sock.groupParticipantsUpdate(from, [args[0] + "@s.whatsapp.net"], "add");
+mkOwner("add", async ({ sock, from, msg, args }) => {
+  const target = getTargetJid(msg, args);
+  if (!target) return sock.sendMessage(from, { text: "❌ Reply to, mention, or provide the number to add." });
+  await sock.groupParticipantsUpdate(from, [target], "add");
+  await sock.sendMessage(from, { text: `✅ Add request sent for @${target.split("@")[0]}.`, mentions: [target] });
 });
 mkOwner("everyonemsg", async ({ sock, from, args }) => {
   const md = await sock.groupMetadata(from);
@@ -1361,8 +1391,8 @@ register("getbio", { toggle: null, run: async ({ sock, from }) => {
   const st = await sock.fetchStatus(from);
   await sock.sendMessage(from, { text: `📝 Bio: ${st?.status || "None"}` });
 }});
-register("getdp", { toggle: null, run: async ({ sock, from, msg }) => {
-  const t = msg.message?.extendedTextMessage?.contextInfo?.participant || from;
+register("getdp", { toggle: null, run: async ({ sock, from, msg, args }) => {
+  const t = getTargetJid(msg, args, from);
   try {
     const url = await sock.profilePictureUrl(t, "image");
     await sock.sendMessage(from, { image: { url }, caption: `📷 @${t.split("@")[0]}`, mentions: [t] });
@@ -1373,7 +1403,26 @@ register("getid", { toggle: null, run: async ({ sock, from, msg }) => {
   const t = msg.message?.extendedTextMessage?.contextInfo?.participant || from;
   await sock.sendMessage(from, { text: `🆔 ${t}` });
 }});
-register("profile", { toggle: null, run: async ({ sock, from }) => sock.sendMessage(from, { text: `👤 ${from}` }) });
+register("profile", { toggle: null, run: async ({ sock, from, msg, args }) => {
+  const t = getTargetJid(msg, args, msg?.key?.participant || from);
+  const clean = String(t).split(":")[0].split("@")[0];
+  let name = "Unknown";
+  let admin = "Private chat";
+  if (from.endsWith("@g.us")) {
+    const md = await sock.groupMetadata(from);
+    const p = md.participants.find((x) => x.id === t || x.jid === t || String(x.id).split(":")[0] === clean);
+    name = p?.name || p?.notify || p?.verifiedName || `+${clean}`;
+    admin = p?.admin || p?.isAdmin || p?.role || "member";
+  }
+  let about = "Unavailable";
+  try { about = (await sock.fetchStatus(t))?.status || "No about/status"; } catch {}
+  let dp = "No profile picture";
+  try { await sock.profilePictureUrl(t, "image"); dp = "Available"; } catch {}
+  await sock.sendMessage(from, {
+    text: `👤 *WHATSAPP PROFILE*\n\n🆔 JID: ${t}\n📛 Name: ${name}\n🛡️ Role: ${admin}\n📝 About: ${about}\n📷 DP: ${dp}`,
+    mentions: [t],
+  });
+}});
 register("opentime", { toggle: null, run: async ({ sock, from, args }) => sock.sendMessage(from, { text: `⏰ Group open time: ${args.join(" ")}` }) });
 
 /* ============================================================

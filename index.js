@@ -1377,7 +1377,15 @@ mk("device", async ({ sock, from }) => sock.sendMessage(from, { text: `📱 Devi
 mk("fakeinfo", async ({ sock, from }) => sock.sendMessage(from, { text: `📋 Fake report generated for demo.` }));
 mk("link", async ({ sock, from }) => {
   const code = await sock.groupInviteCode(from);
-  await sock.sendMessage(from, { text: `🔗 *${(await sock.groupMetadata(from)).subject}*\nhttps://chat.whatsapp.com/${code}` });
+  const md = await sock.groupMetadata(from);
+  const invite = `https://chat.whatsapp.com/${code}`;
+  const caption = `🔗 *${md.subject || "Group Invite"}*\n${invite}`;
+  try {
+    const dp = await sock.profilePictureUrl(from, "image");
+    await sock.sendMessage(from, { image: { url: dp }, caption });
+  } catch {
+    await sock.sendMessage(from, { text: caption });
+  }
 });
 
 /* ============================================================

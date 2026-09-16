@@ -476,6 +476,72 @@ ${text}`;
       }
     }
   });
+  sock.ev.on("messages.delete", async (event) => {
+    const keys = Array.isArray(event) ? event : (event?.keys || []);
+    for (const key of keys) {
+      await recoverDeletedMessage(sock, sessionId, key, null);
+    }
+  });
+}
+
+async function recoverDeletedMessage(sock, sessionId, deletedKey, deleteUpdate = null) {
+  const deletedChat = deletedKey?.remoteJid;
+  const deletedId = deletedKey?.id;
+  if (!deletedChat || !deletedId) return;
+  const scope = deletedChat.endsWith("@g.us") ? deletedChat : sessionId;
+  if (!getToggles(scope).antidelete) return;
+  const cacheKey = `${deletedChat}:${deletedId}`;
+  const old = deletedMessageCache.get(cacheKey);
+  if (!old) return;
+  deletedMessageCache.delete(cacheKey);
+  const oldMessage = unwrapMessage(old.message);
+  const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
+  const source = deletedChat;
+  const originalSender = await resolveOriginalJid(sock, old.key?.participantAlt || old.key?.participant || old.key?.remoteJid || "Unknown");
+  const deletedBy = await resolveOriginalJid(sock, deleteUpdate?.key?.participantAlt || deleteUpdate?.key?.participant || deleteUpdate?.key?.remoteJid || "Unknown");
+  const clean = (jid) => String(jid).split("@")[0].split(":")[0];
+  const isGroup = source.endsWith("@g.us");
+  const isChannel = source.endsWith("@newsletter") || source === "status@broadcast";
+  const cachedGroup = isGroup ? groupMetadataCache.get(source) : null;
+  const participants = cachedGroup?.data?.participants || [];
+  const findParticipant = (jid) => participants.find((p) => p.id === jid || p.jid === jid || p.id === old.key?.participant || p.jid === old.key?.participant);
+  const senderName = old.pushName || findParticipant(originalSender)?.name || findParticipant(originalSender)?.notify || "Unknown user";
+  const deletedByName = deleteUpdate?.pushName || findParticipant(deletedBy)?.name || findParticipant(deletedBy)?.notify || "Unknown user";
+  const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
+    ? cachedGroup.data.subject
+    : (isChannel ? "WhatsApp Channel/Status" : (isGroup ? "WhatsApp Group" : "Personal Inbox"));
+  const type = source === "status@broadcast" || source.endsWith("@newsletter") ? "STATUS" :
+    oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
+    oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
+    oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document" : "Media/Other";
+  const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || "";
+  const text = rawText.replace(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi, "").trim() || "[No text content in this message]";
+  const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
+  const report = `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮
+┃ 🗑️ *Message Deleted & Recovered*
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+📌 *Source Chat:* ${sourceName}
+🆔 *Chat ID:* ${source}
+👤 *Sent By:* ${senderName} (+${clean(originalSender)})
+🗑️ *Deleted By:* ${deletedByName} (+${clean(deletedBy)})
+📂 *Message Type:* ${type}
+🕒 *Detected At:* ${deletedAt}
+
+💬 *Message Content:*
+${text}`;
+  await sock.sendMessage(botInbox, { text: report }).catch(() => {});
+  const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: +${clean(originalSender)}\n🗑️ Deleted by: +${clean(deletedBy)}`;
+  try {
+    const fake = { key: old.key, message: old.message };
+    if (oldMessage?.stickerMessage) await sock.sendMessage(botInbox, { sticker: await downloadMedia(sock, fake) });
+    else if (oldMessage?.imageMessage) await sock.sendMessage(botInbox, { image: await downloadMedia(sock, fake), caption: mediaCaption });
+    else if (oldMessage?.videoMessage) await sock.sendMessage(botInbox, { video: await downloadMedia(sock, fake), caption: mediaCaption });
+    else if (oldMessage?.audioMessage) await sock.sendMessage(botInbox, { audio: await downloadMedia(sock, fake), mimetype: oldMessage.audioMessage.mimetype || "audio/mpeg", ptt: !!oldMessage.audioMessage.ptt });
+    else if (oldMessage?.documentMessage) await sock.sendMessage(botInbox, { document: await downloadMedia(sock, fake), mimetype: oldMessage.documentMessage.mimetype || "application/octet-stream", fileName: oldMessage.documentMessage.fileName || "recovered-file", caption: mediaCaption });
+  } catch (mediaError) {
+    log.warn(`antidelete media recovery failed: ${mediaError?.message || mediaError}`);
+  }
 }
 
 /* ============================================================
@@ -1378,7 +1444,7 @@ const mkOwner = (n, fn) => register(n, {
   toggle: null,
   owner: true,
   run: async (p) => {
-    if (!isController(p.sock, p.from, p.msg, p.sessionId) && !p.msg.key.fromMe)
+    if (!isController(p.sock, p.from, p.msg, p.sessionId))
       return p.sock.sendMessage(p.from, { text: "🚫 Owner only command" });
     await fn(p);
   },

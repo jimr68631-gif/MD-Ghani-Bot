@@ -147,7 +147,8 @@ const pair = {
 const toggleState = new Map();
 const groupMessageSettings = new Map();
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
-  "song", "play", "song2", "video", "tagall", "tag",
+  "song", "play", "song2", "video", "tagall", "tag", "movie",
+  "welcome", "goodbye", "setwelcome", "setgoodbye",
 ]);
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
@@ -960,6 +961,19 @@ async function resolveYouTube(input) {
   if (!first?.url) throw new Error("YouTube video not found");
   return first.url;
 }
+mk("movie", async ({ sock, from, args }) => {
+  const input = args.join(" ").trim();
+  if (!input) return sock.sendMessage(from, { text: "Usage: .movie <authorized/public-domain video URL>" });
+  if (!ytdl.validateURL(input) && !/^https?:\/\//i.test(input)) {
+    return sock.sendMessage(from, { text: "❌ Please send an authorized/public-domain video URL. Movie-title searching does not download full movies." });
+  }
+  try {
+    const media = await downloadWithYtDlp(input, "video");
+    await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title || "Movie video"}` });
+  } catch (error) {
+    throw new Error(`Movie download failed: ${error?.message || "source unavailable"}`);
+  }
+});
 async function downloadWithYtDlp(input, kind) {
   const url = await resolveYouTube(input);
   const ext = kind === "audio" ? "mp3" : "mp4";

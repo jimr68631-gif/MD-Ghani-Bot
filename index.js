@@ -167,6 +167,20 @@ const formatGroupMessage = (template, groupName, user, count) => String(template
   .replaceAll("{count}", String(count));
 async function resolveOriginalJid(sock, jid) {
   if (!jid || !String(jid).endsWith("@lid")) return jid;
+  const mappings = [
+    sock?.signalRepository?.lidMapping,
+    sock?.authState?.keys?.lidMapping,
+    sock?.lidMapping,
+  ].filter(Boolean);
+  for (const mapping of mappings) {
+    for (const method of ["getPNForLID", "getPnForLid"]) {
+      if (typeof mapping?.[method] !== "function") continue;
+      try {
+        const value = await mapping[method](jid);
+        if (value) return String(value).includes("@") ? value : `${String(value).replace(/\D/g, "")}@s.whatsapp.net`;
+      } catch {}
+    }
+  }
   for (const method of ["getPNForLID", "getPnForLid", "getPhoneNumberForLID"]) {
     if (typeof sock?.[method] !== "function") continue;
     try {
@@ -906,7 +920,7 @@ register("enabled", {
       `┃ 🟢 Total: ${normal.length + anti.length}`,
       `╰━━━━━━━━━━━━━━━━━━━━╯`,
       ``,
-      `🧰 *Normal Commands*`,
+      `🧰 *Normal Commands Available*`,
       normal.length ? normal.sort().map((name) => `│ ✅ ${config.prefix}${name}`).join("\n") : "│ ❌ No normal command enabled",
       ``,
       `🛡️ *Anti Features*`,
@@ -937,7 +951,7 @@ register("botstatus", {
 ⚔️ *Anti-Features ON (${anti.length})*
 ${anti.length ? anti.sort().map((name) => `✅ ${config.prefix}${name}`).join("\n") : "❌ No anti-feature is ON"}
 
-🧰 *Normal Commands ON (${enabled.length})*
+🧰 *Normal Commands Available (${enabled.length})*
 ${enabled.length ? enabled.sort().map((name) => `✅ ${config.prefix}${name}`).join("\n") : "❌ No normal command is ON"}`;
     for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) await sock.sendMessage(from, { text: part });
   },
@@ -1122,7 +1136,7 @@ mk("topdf", async ({ sock, from, msg }) => {
   const buf = await downloadMedia(sock, msg);
   await sock.sendMessage(from, { document: buf, mimetype: "application/pdf", fileName: "file.pdf" });
 });
-mk("vv", async ({ sock, from, msg }) => {
+mk("vv", async ({ sock, from, msg, sessionId }) => {
   const message = unwrapMessage(msg.message);
   const context = message?.extendedTextMessage?.contextInfo ||
     message?.imageMessage?.contextInfo || message?.videoMessage?.contextInfo || {};
@@ -1132,19 +1146,35 @@ mk("vv", async ({ sock, from, msg }) => {
     quotedUnwrapped?.viewOnceMessageV2 || quotedUnwrapped?.viewOnceMessage;
   const original = viewOnce?.message || viewOnce || quotedUnwrapped || quoted;
   if (!original) return sock.sendMessage(from, { text: "❌ Reply to a view-once message with .vv" });
-  const destination = from;
+  const ownerMode = isController(sock, from, msg, sessionId);
+  const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
+  const destination = ownerMode ? botInbox : from;
   const emoji = ["👀", "🔥", "😂", "😍", "😮", "❤️", "✨", "🤯"][Math.floor(Math.random() * 8)];
+  if (ownerMode && context.stanzaId) {
+    await sock.sendMessage(from, {
+      react: { text: emoji, key: { remoteJid: from, id: context.stanzaId, participant: context.participant, fromMe: false } },
+    }).catch(() => {});
+  }
   const image = original.imageMessage;
   const video = original.videoMessage;
   const audio = original.audioMessage;
-  if (image || video || audio) {
+  const document = original.documentMessage;
+  const sticker = original.stickerMessage;
+  if (image || video || audio || document || sticker) {
     const fake = { key: { remoteJid: from, id: `VV-${Date.now()}` }, message: original };
     const buf = await downloadMedia(sock, fake);
-    if (image) return sock.sendMessage(destination, { image: buf, caption: `${emoji} ${image.caption || "View-once recovered"}` });
-    if (video) return sock.sendMessage(destination, { video: buf, caption: `${emoji} ${video.caption || "View-once recovered"}` });
-    return sock.sendMessage(destination, { audio: buf, mimetype: audio.mimetype || "audio/mpeg", ptt: !!audio.ptt });
+    let sent;
+    if (image) sent = await sock.sendMessage(destination, { image: buf, caption: `${emoji} ${image.caption || "View-once recovered"}` });
+    else if (video) sent = await sock.sendMessage(destination, { video: buf, caption: `${emoji} ${video.caption || "View-once recovered"}` });
+    else if (audio) sent = await sock.sendMessage(destination, { audio: buf, mimetype: audio.mimetype || "audio/mpeg", ptt: !!audio.ptt });
+    else if (document) sent = await sock.sendMessage(destination, { document: buf, mimetype: document.mimetype || "application/octet-stream", fileName: document.fileName || "view-once-file", caption: `${emoji} View-once recovered` });
+    else sent = await sock.sendMessage(destination, { sticker: buf });
+    if (ownerMode) await sock.sendMessage(from, { delete: msg.key }).catch(() => {});
+    return sent;
   }
-  await sock.sendMessage(destination, { text: `${emoji} View-once message recovered\n${original.conversation || ""}` });
+  const sent = await sock.sendMessage(destination, { text: `${emoji} View-once message recovered\n${original.conversation || original.extendedTextMessage?.text || ""}` });
+  if (ownerMode) await sock.sendMessage(from, { delete: msg.key }).catch(() => {});
+  return sent;
 });
 mk("blur", async ({ sock, from, msg }) => {
   const buf = await downloadMedia(sock, msg);
@@ -1455,6 +1485,12 @@ register("profile", { toggle: null, run: async ({ sock, from, msg, args }) => {
   }
   let about = "Unavailable";
   try { about = (await sock.fetchStatus(t))?.status || "No about/status"; } catch {}
+  if (name === `+${clean}` && typeof sock.onWhatsApp === "function") {
+    try {
+      const contact = (await sock.onWhatsApp(t))?.[0];
+      name = contact?.verifiedName || contact?.notify || name;
+    } catch {}
+  }
   let dpBuffer;
   try {
     const dpUrl = await sock.profilePictureUrl(t, "image");

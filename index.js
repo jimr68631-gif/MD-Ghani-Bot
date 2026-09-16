@@ -1386,10 +1386,15 @@ mk("link", async ({ sock, from }) => {
   }];
   try {
     const dp = await sock.profilePictureUrl(from, "image");
-    await sock.sendMessage(from, { image: { url: dp }, caption, templateButtons: viewGroupButton });
+    await sock.sendMessage(from, { image: { url: dp }, caption });
   } catch {
-    await sock.sendMessage(from, { text: caption, templateButtons: viewGroupButton });
+    await sock.sendMessage(from, { text: caption });
   }
+  await sock.sendMessage(from, {
+    text: `👥 *View Group:* ${md.subject || "Group"}\nClick the button below to join this group.`,
+    footer: "MD-Ghani-Bot",
+    templateButtons: viewGroupButton,
+  });
 });
 
 /* ============================================================

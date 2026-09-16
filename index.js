@@ -169,20 +169,11 @@ const antiWarningStyles = {
 };
 const antiWarningLastStyle = new Map();
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
-  "song", "setgrouppp", "welcome", "goodbye", "song2", "video", "tagall", "tag",
-  "antidelete",
+  "song", "welcome", "goodbye", "setwelcome", "setgoodbye", "song2", "video", "tagall", "tag",
 ]);
 const OWNER_ONLY_COMMANDS = new Set([
-  "song", "setgrouppp", "welcome", "goodbye", "song2", "video", "tagall", "tag",
-  "antidelete",
+  "song", "welcome", "goodbye", "setwelcome", "setgoodbye", "song2", "video", "tagall", "tag",
 ]);
-const commandState = new Map();
-const getCommandState = (scope) => {
-  if (!commandState.has(scope)) commandState.set(scope, new Map());
-  return commandState.get(scope);
-};
-const isCommandEnabled = (scope, name) => getCommandState(scope).get(name) === true;
-const setCommandEnabled = (scope, name, enabled) => getCommandState(scope).set(name, enabled);
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
     groupMessageSettings.set(group, {
@@ -770,17 +761,6 @@ async function handleMessage(sock, msg, sessionId) {
     // Everyone else is ignored without a reply, even when the bot is a group admin.
     if (groupChat && OWNER_ONLY_COMMANDS.has(normalizedCommand) && !controller) return;
 
-    // Every normal command starts OFF. Only the connected owner can turn a command on/off.
-    const commandScope = groupChat ? from : sessionId;
-    if ((args[0] === "on" || args[0] === "off") && controller) {
-      setCommandEnabled(commandScope, normalizedCommand, args[0] === "on");
-      if (!["welcome", "goodbye", ...ANTI_LIST, ...AUTO_LIST].includes(normalizedCommand)) {
-        return sock.sendMessage(from, {
-          text: styledToggleReply(normalizedCommand, args[0] === "on", `Command control updated for this ${groupChat ? "group" : "session"}`),
-        });
-      }
-    }
-
     const inGroup = from.endsWith("@g.us");
     const ownerCommand = cmd.owner === true;
     if (!inGroup) {
@@ -795,24 +775,6 @@ async function handleMessage(sock, msg, sessionId) {
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       const ownerSpecial = controller && OWNER_ONLY_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
-    }
-
-    const commandControlExempt = new Set([
-      "song", "setgrouppp", "welcome", "goodbye", "song2", "video", "tagall", "tag",
-      ...ANTI_LIST, ...AUTO_LIST,
-    ]);
-    if (!commandControlExempt.has(normalizedCommand) && !isCommandEnabled(commandScope, normalizedCommand)) {
-      // Non-owner users must remain completely silent while commands are OFF.
-      if (!controller) return;
-      return sock.sendMessage(from, {
-        text: styledToggleReply(normalizedCommand, false, `Enable with .${normalizedCommand} on`),
-      });
-    }
-
-    if (cmd.toggle && !isOn(sessionId, cmd.toggle)) {
-      return sock.sendMessage(from, {
-        text: styledToggleReply(cmdName, false, `Enable with .${cmdName} on`),
-      });
     }
 
     try {

@@ -998,17 +998,14 @@ async function downloadWithYtDlp(input, kind) {
   const url = await resolveYouTube(input);
   const ext = kind === "audio" ? "mp3" : "mp4";
   const base = path.join(os.tmpdir(), `md-ghani-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  const output = `${base}.%(ext)s`;
+  const output = `${base}.${ext}`;
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
     const binary = fs.existsSync("/opt/yt-dlp/bin/yt-dlp") ? "/opt/yt-dlp/bin/yt-dlp" : "yt-dlp";
-    const clients = [null, "tv_embedded", "android"];
+    const clients = ["tv_embedded", "web_safari", "android", "web_creator"];
     let lastError;
     for (const client of clients) {
-      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--max-filesize", "50M", "-f", format, "-o", output];
-      if (kind === "video") args.push("--merge-output-format", "mp4");
-      if (client) args.splice(11, 0, "--extractor-args", `youtube:player_client=${client}`);
-      if (fs.existsSync("/usr/local/bin/deno")) args.push("--js-runtimes", "deno");
+      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "2", "--fragment-retries", "2", "--retry-sleep", "linear=1::3", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
       args.push(url);
       try {
@@ -1021,20 +1018,22 @@ async function downloadWithYtDlp(input, kind) {
       }
     }
     if (lastError) throw lastError;
-    const finalOutput = `${base}.${ext}`;
-    const buffer = await fs.promises.readFile(finalOutput);
+    const buffer = await fs.promises.readFile(output);
     if (!buffer.length) throw new Error("Downloaded file is empty");
     return { buffer, title: input, mimetype: kind === "audio" ? "audio/mpeg" : "video/mp4" };
   } finally {
     await fs.promises.rm(output, { force: true }).catch(() => {});
-    await fs.promises.rm(`${base}.${ext}`, { force: true }).catch(() => {});
-    await fs.promises.rm(`${base}.webm`, { force: true }).catch(() => {});
-    await fs.promises.rm(`${base}.mkv`, { force: true }).catch(() => {});
     await fs.promises.rm(`${base}.part`, { force: true }).catch(() => {});
   }
 }
 async function legacyYouTube(input, kind) {
-  throw new Error("No working YouTube fallback provider is configured");
+  const isUrl = ytdl.validateURL(input);
+  const url = isUrl ? input : (await axios.get("https://api.akuari.my.id/search/youtube", { params: { query: input }, timeout: 20000 })).data?.result?.[0]?.url;
+  if (!url) throw new Error("Video not found");
+  const data = (await axios.get("https://api.akuari.my.id/downloader/youtube", { params: { link: url }, timeout: 30000 })).data?.result;
+  const mediaUrl = kind === "audio" ? data?.mp3 : data?.video;
+  if (!mediaUrl) throw new Error("Fallback media provider returned no file");
+  return { mediaUrl, title: input };
 }
 mk("ytmp4", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
@@ -1043,7 +1042,8 @@ mk("ytmp4", async ({ sock, from, args }) => {
     const media = await downloadWithYtDlp(input, "video");
     await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title}` });
   } catch (primary) {
-    throw new Error(`YouTube download failed: ${primary?.stderr?.split("\n").filter(Boolean).slice(-1)[0] || primary?.message || "unknown extractor error"}`);
+    try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}` }); }
+    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
   }
 });
 mk("ytmp3", async ({ sock, from, args }) => {
@@ -1052,8 +1052,9 @@ mk("ytmp3", async ({ sock, from, args }) => {
   try {
     const media = await downloadWithYtDlp(input, "audio");
     await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
-  } catch (primary) {
-    throw new Error(`YouTube download failed: ${primary?.stderr?.split("\n").filter(Boolean).slice(-1)[0] || primary?.message || "unknown extractor error"}`);
+  } catch {
+    try { const f = await legacyYouTube(input, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
+    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
   }
 });
 mk("song", async ({ sock, from, args }) => {
@@ -1062,8 +1063,9 @@ mk("song", async ({ sock, from, args }) => {
   try {
     const media = await downloadWithYtDlp(q, "audio");
     await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
-  } catch (primary) {
-    throw new Error(`YouTube download failed: ${primary?.stderr?.split("\n").filter(Boolean).slice(-1)[0] || primary?.message || "unknown extractor error"}`);
+  } catch {
+    try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
+    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
   }
 });
 mk("song2", async (p) => commands.get("song").run(p));

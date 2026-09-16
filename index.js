@@ -116,7 +116,7 @@ const config = {
 
 const defaultToggles = {
   antibadword: false, antibot: false, antibug: false, anticontact: false,
-  antidelete: true, antidemote: false, antipromote: false, antidocument: false,
+  antidelete: false, antidemote: false, antipromote: false, antidocument: false,
   antiedit: false, antiforward: false, antigif: false, antiimage: false,
   antilink: false, antilocation: false, antimessage: false, antipoll: false,
   antistatus: false, antisticker: false, antitag: false, antitagadmin: false,
@@ -203,7 +203,7 @@ const setToggle = (id, key, val) => {
 };
 const isOn = (id, key) => !!getToggles(id)[key];
 const commandKey = (group, name) => `${group}:${String(name).toLowerCase()}`;
-const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) !== false;
+const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) === true;
 const setCommandEnabled = (group, name, enabled) => enabledCommandState.set(commandKey(group, name), enabled);
 const styledToggleReply = (name, enabled, detail = "") => `╭━━━❰ *${String(name).toUpperCase()}* ❱━━━╮
 ┃ ${enabled ? "🟢 Status: ON ✅" : "🔴 Status: OFF ❌"}
@@ -751,10 +751,20 @@ mk("kickoffline", async ({ sock, from }) => {
 });
 mk("tagall", async ({ sock, from, args }) => {
   const md = await sock.groupMetadata(from);
-  const txt = args.join(" ") || "📢 Attention";
+  const txt = args.join(" ") || "Attention everyone 😋";
   const mentions = md.participants.map((p) => p.id);
+  const emojis = ["😋", "🔥", "🎯", "⚡", "💫", "🌟", "🚀", "😎", "🎉", "💥", "✨", "🤩"];
+  const lines = mentions.map((m, i) => `${i + 1}. ${emojis[i % emojis.length]} @${m.split("@")[0]}`);
+  const heading = `╭━━━❰ *TAG ALL* ❱━━━╮
+┃ 🏷️ Group: *${md.subject || "Group"}*
+┃ 👥 Members: *${mentions.length}*
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+📢 *${txt}*
+
+${lines.join("\n")}`;
   await sock.sendMessage(from, {
-    text: `*${txt}*\n\n${mentions.map((m, i) => `${i + 1}. @${m.split("@")[0]}`).join("\n")}`, mentions,
+    text: heading, mentions,
   });
 });
 mk("hidetag", async ({ sock, from, args }) => {
@@ -970,7 +980,7 @@ register("statuspost", {
       const statusJidList = md.participants.map((p) => p.id).filter(Boolean);
       const result = await sock.sendMessage("status@broadcast", { text }, { statusJidList });
       if (!result?.key?.id) throw new Error("WhatsApp did not return a status message id");
-      await sock.sendMessage(from, { text: `╭━━━❰ *GC STATUS* ❱━━━╮\n┃ ✅ Story posted successfully\n┃ 👥 Audience: ${statusJidList.length} group members\n╰━━━━━━━━━━━━━━━━━━━━╯` });
+      await sock.sendMessage(from, { text: `╭━━━❰ *GC STATUS* ❱━━━╮\n┃ ✅ WhatsApp accepted the status request\n┃ 👥 Audience list: ${statusJidList.length} group members\n┃ ℹ️ Visibility depends on WhatsApp status privacy/account support\n╰━━━━━━━━━━━━━━━━━━━━╯` });
     } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
   },
 });

@@ -145,12 +145,10 @@ const pair = {
  *  3. TOGGLE STORE
  * ============================================================ */
 const toggleState = new Map();
-const enabledCommandState = new Map();
 const groupMessageSettings = new Map();
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag",
 ]);
-const OWNER_CONTROL_COMMANDS = new Set(["enable", "disable"]);
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
     groupMessageSettings.set(group, {
@@ -203,8 +201,6 @@ const setToggle = (id, key, val) => {
   return true;
 };
 const isOn = (id, key) => !!getToggles(id)[key];
-const commandKey = (group, name) => `${group}:${String(name).toLowerCase()}`;
-const isCommandEnabled = (group, name) => enabledCommandState.get(commandKey(group, name)) === true;
 const styledToggleReply = (name, enabled, detail = "") => `╭━━━❰ *${String(name).toUpperCase()}* ❱━━━╮
 ┃ ${enabled ? "🟢 Status: ON ✅" : "🔴 Status: OFF ❌"}
 ${detail ? `┃ 📝 ${detail}\n` : ""}╰━━━━━━━━━━━━━━━━━━━━╯`;
@@ -621,7 +617,7 @@ async function handleMessage(sock, msg, sessionId) {
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
-    if (groupChat && !botAdmin && (!controller || (!BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand) && !OWNER_CONTROL_COMMANDS.has(normalizedCommand)))) return;
+    if (groupChat && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -660,7 +656,6 @@ async function handleMessage(sock, msg, sessionId) {
 
     const inGroup = from.endsWith("@g.us");
     const ownerCommand = cmd.owner === true;
-    const ownerControl = OWNER_CONTROL_COMMANDS.has(normalizedCommand);
     if (!inGroup) {
       if (!isController(sock, from, msg, sessionId)) {
         return sock.sendMessage(from, { text: "🚫 This bot accepts commands only from its connected owner." });
@@ -670,15 +665,9 @@ async function handleMessage(sock, msg, sessionId) {
         return sock.sendMessage(from, { text: "🚫 Owner-only command." });
       }
       if (!(await requireBotAdminOnly(sock, from))) return;
-    } else if (ownerControl) {
-      if (!controller) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
-      const configurable = ANTI_LIST?.includes(normalizedCommand) || AUTO_LIST?.includes(normalizedCommand) || ["botstatus", "warn", "set"].includes(normalizedCommand);
-      if (!configurable && !isCommandEnabled(from, normalizedCommand)) {
-        return sock.sendMessage(from, { text: `${styledToggleReply(normalizedCommand, false, "This command is currently OFF")}` });
-      }
     }
 
     if (cmd.toggle && !isOn(sessionId, cmd.toggle)) {
@@ -908,28 +897,6 @@ register("set", {
     await sock.sendMessage(from, { text: ok ? styledToggleReply(args[0], getToggles(sessionId)[args[0]], "Updated") : styledToggleReply(args[0], false, "Unknown toggle") });
   },
 });
-register("enable", {
-  toggle: null,
-  ownerControl: true,
-  run: async ({ sock, from, msg, args, sessionId }) => {
-    if (!isController(sock, from, msg, sessionId)) return;
-    const name = String(args[0] || "").toLowerCase();
-    if (!commands.has(name) || OWNER_CONTROL_COMMANDS.has(name)) return sock.sendMessage(from, { text: styledToggleReply(name || "COMMAND", false, "Command not found") });
-    setCommandEnabled(from, name, true);
-    await sock.sendMessage(from, { text: styledToggleReply(name, true, "Enabled by bot owner for this group") });
-  },
-});
-register("disable", {
-  toggle: null,
-  ownerControl: true,
-  run: async ({ sock, from, msg, args, sessionId }) => {
-    if (!isController(sock, from, msg, sessionId)) return;
-    const name = String(args[0] || "").toLowerCase();
-    if (!commands.has(name)) return sock.sendMessage(from, { text: styledToggleReply(name || "COMMAND", false, "Command not found") });
-    setCommandEnabled(from, name, false);
-    await sock.sendMessage(from, { text: styledToggleReply(name, false, "Disabled by bot owner for this group") });
-  },
-});
 register("botstatus", {
   toggle: null,
   run: async ({ sock, from, msg }) => {
@@ -937,7 +904,7 @@ register("botstatus", {
     const toggles = getToggles(from);
     const botIsAdmin = await requireBotAdminOnly(sock, from);
     const anti = ANTI_LIST.filter((name) => toggles[name]);
-    const enabled = [...commands.keys()].filter((name) => isCommandEnabled(from, name) && !ANTI_LIST.includes(name));
+    const enabled = [...commands.keys()].filter((name) => !ANTI_LIST.includes(name));
     const status = botIsAdmin ? "🟢 ACTIVE" : "🔴 INACTIVE — Bot is not group admin";
     const text = `╭━━━❰ *BOT STATUS* ❱━━━╮
 ┃ ${status}

@@ -146,6 +146,12 @@ const pair = {
  * ============================================================ */
 const toggleState = new Map();
 const groupMessageSettings = new Map();
+const antiWarningCounts = new Map();
+const antiWarningStyles = [
+  (user, key) => `⚠️ *WARNING (1/3)*\n@${user} — *${key}* is not allowed in this group.\nPlease do not repeat it.`,
+  (user, key) => `╭━━━❰ ⚠️ WARNING 2/3 ❱━━━╮\n┃ @${user}\n┃ *${key}* is not allowed here.\n┃ Next violation will remove you.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
+  (user, key) => `🚨 *FINAL WARNING (3/3)* 🚨\n@${user} — *${key}* is still not allowed in this group.\n🚫 You are being removed now.`,
+];
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag", "movie",
   "welcome", "goodbye", "setwelcome", "setgoodbye",
@@ -539,12 +545,17 @@ async function runAnti(sock, msg, sessionId, toggles) {
 
 async function takeAction(sock, group, user, msg, key) {
   try {
+    const warningKey = `${group}:${user}:${key}`;
+    const warningNumber = Math.min(3, (antiWarningCounts.get(warningKey) || 0) + 1);
+    antiWarningCounts.set(warningKey, warningNumber);
     await sock.sendMessage(group, { delete: msg.key }).catch(() => {});
+    const shouldRemove = warningNumber >= 3;
+    const warningText = antiWarningStyles[warningNumber - 1](user.split("@")[0], key.toUpperCase());
     await sock.sendMessage(group, {
-      text: `⚠️ @${user.split("@")[0]} — message deleted because *${key.toUpperCase()}* is not allowed.${antilinkActionState.get(group) === "kick" && key === "antilink" ? " User removed from group." : ""}`,
+      text: warningText,
       mentions: [user],
     });
-    if (key === "antilink" && antilinkActionState.get(group) === "kick") {
+    if (shouldRemove || (key === "antilink" && antilinkActionState.get(group) === "kick")) {
       await sock.groupParticipantsUpdate(group, [user], "remove").catch(() => {});
     }
   } catch (e) { log.error("anti: " + e.message); }

@@ -105,7 +105,7 @@ const config = {
   owner: [(process.env.OWNER_NUMBER || "923000000000") + "@s.whatsapp.net"],
   prefix: ".",
   channelJid: "120363429085670060@newsletter",
-  channelLink: "https://whatsapp.com/channel/120363429085670060",
+  channelLink: "https://whatsapp.com/channel/0029Vb8vvB1Fcow4AY0NeC1p",
   pairingTimeout: 60000,
   browser: Browsers.ubuntu("Chrome"),
   alwaysOnline: true,
@@ -2743,7 +2743,7 @@ const PAIR_HTML = `<!DOCTYPE html>
 
     <!-- BUTTON #2 -->
     <div class="btn-wrap">
-      <a href="https://whatsapp.com/channel/120363429085670060"
+      <a href="https://whatsapp.com/channel/0029Vb8vvB1Fcow4AY0NeC1p"
          onclick="openChannel(event)"
          target="_blank"
          rel="noopener"
@@ -3481,7 +3481,7 @@ function setPhosphor(name, silent){
 
 function copyChannelLink(){
   Sound.copy();
-  const link = 'https://whatsapp.com/channel/120363429085670060';
+  const link = 'https://whatsapp.com/channel/0029Vb8vvB1Fcow4AY0NeC1p';
   const done = () => {
     showToast('LINK COPIED', 'Channel link saved to clipboard');
     log('ok', 'channel link copied to clipboard');
@@ -3682,7 +3682,7 @@ function openChannel(e){
   setTimeout(() => Sound.success(), 250);
   log('inf', 'opening channel link...');
 
-  const channelId = '120363429085670060';
+  const channelId = '0029Vb8vvB1Fcow4AY0NeC1p';
   const httpsLink = 'https://whatsapp.com/channel/' + channelId;
   const appLink   = 'whatsapp://channel/' + channelId;
   const isMobile  = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);

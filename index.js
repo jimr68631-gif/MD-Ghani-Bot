@@ -107,7 +107,7 @@ const config = {
   channelJid: "120363429085670060@newsletter",
   channelLink: "https://whatsapp.com/channel/120363429085670060",
   pairingTimeout: 60000,
-  browser: Browsers.ubuntu("Chrome"),
+  browser: ["Windows", "Chrome", "Chrome 114.0.5735.198"],
   alwaysOnline: true,
   sessionDir: "./sessions",
   timezone: "Asia/Karachi",
@@ -244,6 +244,11 @@ function getBaileysVersion() {
  * ============================================================ */
 async function startSession(sessionId, phoneNumber) {
   if (shuttingDown) return { ok: false, error: "Bot is shutting down" };
+  const normalizedPhone = String(phoneNumber || sessionId || "").replace(/\D/g, "");
+  if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+    return { ok: false, error: "Valid phone number with country code required" };
+  }
+  phoneNumber = normalizedPhone;
   const existing = sessions.get(sessionId);
   if (existing?.starting) return { ok: true, code: null };
   if (existing?.sock) return { ok: true, code: null };
@@ -283,8 +288,28 @@ async function startSession(sessionId, phoneNumber) {
   sessions.set(sessionId, { sock, info: { phoneNumber }, wired: false, starting: false, reconnectTimer: null });
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (u) => {
-    const { connection, lastDisconnect } = u;
+  let pairingRequested = false;
+  let pairingResolve;
+  let pairingReject;
+  const pairingReady = new Promise((resolve, reject) => {
+    pairingResolve = resolve;
+    pairingReject = reject;
+  });
+
+  sock.ev.on("connection.update", async (u) => {
+    const { connection, lastDisconnect, qr } = u;
+    if (qr && !sock.authState.creds.registered && !pairingRequested) {
+      pairingRequested = true;
+      try {
+        const code = await sock.requestPairingCode(normalizedPhone);
+        pair.ok(code);
+        pairingResolve(code);
+      } catch (e) {
+        pair.fail(e);
+        pair.err(e);
+        pairingReject(e);
+      }
+    }
     if (connection === "open") {
       log.info(`🟢 ${sessionId} connected`);
       wireHandlers(sessionId);
@@ -297,15 +322,22 @@ async function startSession(sessionId, phoneNumber) {
     }
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
+      if (!sock.authState.creds.registered) {
+        log.error(`🚫 Pairing socket closed before registration for ${sessionId}`);
+        if (!pairingRequested) pairingReject(new Error("Connection Closed"));
+        sessions.delete(sessionId);
+        return;
+      }
       if (code !== DisconnectReason.loggedOut && !shuttingDown) {
-        log.warn(`♻️ Reconnecting ${sessionId}...`);
+        const restartRequired = code === DisconnectReason.restartRequired || code === 515;
+        log.warn(`${restartRequired ? "🔄 Restarting paired session" : "♻️ Reconnecting"} ${sessionId}...`);
         const current = sessions.get(sessionId);
         if (current && !current.reconnectTimer) {
           current.reconnectTimer = setTimeout(() => {
             current.reconnectTimer = null;
             if (sessions.get(sessionId)?.sock === sock) sessions.delete(sessionId);
             startSession(sessionId, phoneNumber).catch((e) => log.error(`reconnect ${sessionId}: ${e?.message || e}`));
-          }, 5000);
+          }, restartRequired ? 1500 : 5000);
         }
       } else {
         if (sessions.get(sessionId)?.reconnectTimer) clearTimeout(sessions.get(sessionId).reconnectTimer);
@@ -321,9 +353,8 @@ async function startSession(sessionId, phoneNumber) {
     pair.got(sessionId);
     pair.req(phoneNumber);
     try {
-      await new Promise((r) => setTimeout(r, 3000));
-      const code = await sock.requestPairingCode(phoneNumber);
-      pair.ok(code);
+      // Wait for Baileys' QR/handshake event before requesting the pairing code.
+      const code = await pairingReady;
       return { ok: true, code };
     } catch (e) {
       pair.fail(e);
@@ -1654,6 +1685,12 @@ app.post("/pair", async (req, res) => {
   }
   pair.got(sessionId);
   try {
+    const active = sessions.get(sessionId);
+    if (active?.sock && !active.sock.authState?.creds?.registered) {
+      try { active.sock.ws?.close(); } catch {}
+      sessions.delete(sessionId);
+      fs.rmSync(`${config.sessionDir}/${sessionId}`, { recursive: true, force: true });
+    }
     const out = await startSession(sessionId, sessionId);
     if (out.ok && out.code) return res.json({ ok: true, code: out.code, sessionId });
     if (out.ok) return res.json({ ok: true, code: "ALREADY_CONNECTED", sessionId });

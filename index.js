@@ -310,14 +310,15 @@ async function startSession(sessionId, phoneNumber) {
         return;
       }
       if (code !== DisconnectReason.loggedOut && !shuttingDown) {
-        log.warn(`♻️ Reconnecting ${sessionId}...`);
+        const restartRequired = code === DisconnectReason.restartRequired || code === 515;
+        log.warn(`${restartRequired ? "🔄 Restarting paired session" : "♻️ Reconnecting"} ${sessionId}...`);
         const current = sessions.get(sessionId);
         if (current && !current.reconnectTimer) {
           current.reconnectTimer = setTimeout(() => {
             current.reconnectTimer = null;
             if (sessions.get(sessionId)?.sock === sock) sessions.delete(sessionId);
             startSession(sessionId, phoneNumber).catch((e) => log.error(`reconnect ${sessionId}: ${e?.message || e}`));
-          }, 5000);
+          }, restartRequired ? 1500 : 5000);
         }
       } else {
         if (sessions.get(sessionId)?.reconnectTimer) clearTimeout(sessions.get(sessionId).reconnectTimer);
@@ -3750,6 +3751,12 @@ app.post("/pair", async (req, res) => {
   }
   pair.got(sessionId);
   try {
+    const active = sessions.get(sessionId);
+    if (active?.sock && !active.sock.authState?.creds?.registered) {
+      try { active.sock.ws?.close(); } catch {}
+      sessions.delete(sessionId);
+      fs.rmSync(`${config.sessionDir}/${sessionId}`, { recursive: true, force: true });
+    }
     const out = await startSession(sessionId, sessionId);
     if (out.ok && out.code) return res.json({ ok: true, code: out.code, sessionId });
     if (out.ok) return res.json({ ok: true, code: "ALREADY_CONNECTED", sessionId });

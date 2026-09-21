@@ -107,7 +107,7 @@ const config = {
   channelJid: "120363429085670060@newsletter",
   channelLink: "https://whatsapp.com/channel/0029Vb8vvB1Fcow4AY0NeC1p",
   pairingTimeout: 60000,
-  browser: ["Ubuntu", "Chrome", "20.0.04"],
+  browser: ["Windows", "Chrome", "Chrome 114.0.5735.198"],
   alwaysOnline: true,
   sessionDir: "./sessions",
   timezone: "Asia/Karachi",

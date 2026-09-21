@@ -288,8 +288,28 @@ async function startSession(sessionId, phoneNumber) {
   sessions.set(sessionId, { sock, info: { phoneNumber }, wired: false, starting: false, reconnectTimer: null });
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (u) => {
-    const { connection, lastDisconnect } = u;
+  let pairingRequested = false;
+  let pairingResolve;
+  let pairingReject;
+  const pairingReady = new Promise((resolve, reject) => {
+    pairingResolve = resolve;
+    pairingReject = reject;
+  });
+
+  sock.ev.on("connection.update", async (u) => {
+    const { connection, lastDisconnect, qr } = u;
+    if (qr && !sock.authState.creds.registered && !pairingRequested) {
+      pairingRequested = true;
+      try {
+        const code = await sock.requestPairingCode(normalizedPhone);
+        pair.ok(code);
+        pairingResolve(code);
+      } catch (e) {
+        pair.fail(e);
+        pair.err(e);
+        pairingReject(e);
+      }
+    }
     if (connection === "open") {
       log.info(`🟢 ${sessionId} connected`);
       wireHandlers(sessionId);
@@ -306,6 +326,7 @@ async function startSession(sessionId, phoneNumber) {
       // entering its code; reconnecting would invalidate that code immediately.
       if (!sock.authState.creds.registered) {
         log.error(`🚫 Pairing socket closed before registration for ${sessionId}`);
+        if (!pairingRequested) pairingReject(new Error("Connection Closed"));
         sessions.delete(sessionId);
         return;
       }
@@ -334,11 +355,9 @@ async function startSession(sessionId, phoneNumber) {
     pair.got(sessionId);
     pair.req(phoneNumber);
     try {
-      // Give the socket time to finish its initial handshake before asking
-      // WhatsApp for the code. The number must be digits only, with country code.
-      await new Promise((r) => setTimeout(r, 8000));
-      const code = await sock.requestPairingCode(normalizedPhone);
-      pair.ok(code);
+      // Baileys emits qr after the socket handshake; request the pairing code
+      // from that event so the underlying connection is ready.
+      const code = await pairingReady;
       return { ok: true, code };
     } catch (e) {
       pair.fail(e);

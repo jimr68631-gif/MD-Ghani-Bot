@@ -244,6 +244,11 @@ function getBaileysVersion() {
  * ============================================================ */
 async function startSession(sessionId, phoneNumber) {
   if (shuttingDown) return { ok: false, error: "Bot is shutting down" };
+  const normalizedPhone = String(phoneNumber || sessionId || "").replace(/\D/g, "");
+  if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+    return { ok: false, error: "Valid phone number with country code required" };
+  }
+  phoneNumber = normalizedPhone;
   const existing = sessions.get(sessionId);
   if (existing?.starting) return { ok: true, code: null };
   if (existing?.sock) return { ok: true, code: null };
@@ -297,6 +302,13 @@ async function startSession(sessionId, phoneNumber) {
     }
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
+      // Never replace an unregistered pairing socket while a user may still be
+      // entering its code; reconnecting would invalidate that code immediately.
+      if (!sock.authState.creds.registered) {
+        log.error(`🚫 Pairing socket closed before registration for ${sessionId}`);
+        sessions.delete(sessionId);
+        return;
+      }
       if (code !== DisconnectReason.loggedOut && !shuttingDown) {
         log.warn(`♻️ Reconnecting ${sessionId}...`);
         const current = sessions.get(sessionId);
@@ -321,8 +333,10 @@ async function startSession(sessionId, phoneNumber) {
     pair.got(sessionId);
     pair.req(phoneNumber);
     try {
-      await new Promise((r) => setTimeout(r, 3000));
-      const code = await sock.requestPairingCode(phoneNumber);
+      // Give the socket time to finish its initial handshake before asking
+      // WhatsApp for the code. The number must be digits only, with country code.
+      await new Promise((r) => setTimeout(r, 8000));
+      const code = await sock.requestPairingCode(normalizedPhone);
       pair.ok(code);
       return { ok: true, code };
     } catch (e) {

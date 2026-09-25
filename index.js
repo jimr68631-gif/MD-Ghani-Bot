@@ -1085,10 +1085,12 @@ async function downloadWithYtDlp(input, kind) {
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
     const binary = await getYtDlpBinary();
-    const clients = ["tv_embedded", "web_safari", "android", "web_creator"];
+    const clients = ["android_vr", "tv_embedded", "web_safari", "android", "web_creator"];
+    const cookieFile = process.env.YOUTUBE_COOKIES_FILE;
     let lastError;
     for (const client of clients) {
-      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "2", "--fragment-retries", "2", "--retry-sleep", "linear=1::3", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
+      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
+      if (cookieFile && fs.existsSync(cookieFile)) args.push("--cookies", cookieFile);
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
       args.push(url);
       try {
@@ -1130,7 +1132,10 @@ ${mediaFooter()}` });
     try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}
 
 ${mediaFooter()}` }); }
-    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
+    catch (fallbackError) {
+      log.warn(`YouTube download failed: ${fallbackError?.message || fallbackError}`);
+      throw new Error("YouTube download failed. Please try again shortly.");
+    }
   }
 });
 mk("ytmp3", async ({ sock, from, args }) => {
@@ -1143,7 +1148,10 @@ mk("ytmp3", async ({ sock, from, args }) => {
   } catch {
     try { const f = await legacyYouTube(input, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false });
       await sendMediaFooter(sock, from); }
-    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
+    catch (fallbackError) {
+      log.warn(`YouTube download failed: ${fallbackError?.message || fallbackError}`);
+      throw new Error("YouTube download failed. Please try again shortly.");
+    }
   }
 });
 mk("song", async ({ sock, from, args }) => {
@@ -1156,7 +1164,10 @@ mk("song", async ({ sock, from, args }) => {
   } catch {
     try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false });
       await sendMediaFooter(sock, from); }
-    catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
+    catch (fallbackError) {
+      log.warn(`YouTube download failed: ${fallbackError?.message || fallbackError}`);
+      throw new Error("YouTube download failed. Please try again shortly.");
+    }
   }
 });
 mk("song2", async (p) => commands.get("song").run(p));

@@ -156,6 +156,11 @@ const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag", "movie",
   "welcome", "goodbye", "setwelcome", "setgoodbye",
 ]);
+// These commands must be completely silent for everyone except the connected owner.
+const OWNER_ONLY_SILENT_COMMANDS = new Set([
+  "song", "song2", "play", "video", "tag", "tagall",
+  "welcome", "goodbye", "setwelcome", "setgoodbye",
+]);
 const getGroupMessageSettings = (group) => {
   if (!groupMessageSettings.has(group)) {
     groupMessageSettings.set(group, {
@@ -220,6 +225,8 @@ const register = (name, opts) => commands.set(String(name).trim().toLowerCase(),
 const sessions = new Map();
 let shuttingDown = false;
 const deletedMessageCache = new Map();
+// Keep recent full messages available for Baileys retry/decryption requests.
+const messageRetryCache = new Map();
 const warningState = new Map();
 let baileysVersionPromise;
 
@@ -280,8 +287,9 @@ async function startSession(sessionId, phoneNumber) {
     generateHighQualityLinkPreview: true,
     defaultQueryTimeoutMs: undefined,
     getMessage: async (key) => {
-      const cached = deletedMessageCache.get(`${key?.remoteJid}:${key?.id}`);
-      return cached?.message;
+      const cacheKey = `${key?.remoteJid}:${key?.id}`;
+      const cached = messageRetryCache.get(cacheKey) || deletedMessageCache.get(cacheKey);
+      return cached?.message || cached;
     },
   });
 
@@ -379,8 +387,11 @@ function wireHandlers(sessionId) {
     const toggles = getToggles(sessionId);
     for (const msg of messages) {
       if (!msg.message) continue;
-      deletedMessageCache.set(`${msg.key.remoteJid}:${msg.key.id}`, msg);
+      const messageKey = `${msg.key.remoteJid}:${msg.key.id}`;
+      deletedMessageCache.set(messageKey, msg);
+      messageRetryCache.set(messageKey, msg);
       if (deletedMessageCache.size > 1000) deletedMessageCache.delete(deletedMessageCache.keys().next().value);
+      if (messageRetryCache.size > 5000) messageRetryCache.delete(messageRetryCache.keys().next().value);
       Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
       Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch((e) => log.error(`anti: ${e.message}`));
       Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
@@ -657,6 +668,8 @@ async function handleMessage(sock, msg, sessionId) {
     const [cmdName, ...args] = commandText.slice(config.prefix.length).trim().split(/\s+/);
     if (!cmdName) return;
     const normalizedCommand = String(cmdName).trim().toLowerCase();
+    // Ignore these commands silently when written by anyone other than the owner.
+    if (OWNER_ONLY_SILENT_COMMANDS.has(normalizedCommand) && !isController(sock, from, msg, sessionId)) return;
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;

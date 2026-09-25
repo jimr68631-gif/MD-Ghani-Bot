@@ -1038,6 +1038,45 @@ Apple TV: https://tv.apple.com/us/search?term=${q}
 ℹ️ Availability and pricing depend on your country. Full copyrighted movie files are not downloaded.`;
   await sock.sendMessage(from, { text });
 });
+let ytDlpBinaryPromise;
+async function getYtDlpBinary() {
+  if (!ytDlpBinaryPromise) {
+    ytDlpBinaryPromise = (async () => {
+      const candidates = [
+        process.env.YT_DLP_PATH,
+        "/opt/yt-dlp/bin/yt-dlp",
+        "yt-dlp",
+      ].filter(Boolean);
+      for (const candidate of candidates) {
+        try {
+          await execFileAsync(candidate, ["--version"], { timeout: 10000 });
+          return candidate;
+        } catch {}
+      }
+      // Download the official standalone binary once when the host has no yt-dlp package.
+      const target = path.join(os.tmpdir(), "md-ghani-yt-dlp");
+      try {
+        const response = await axios.get(
+          "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
+          { responseType: "arraybuffer", timeout: 60000 }
+        );
+        await fs.promises.writeFile(target, Buffer.from(response.data), { mode: 0o755 });
+        await fs.promises.chmod(target, 0o755);
+        await execFileAsync(target, ["--version"], { timeout: 15000 });
+        return target;
+      } catch (error) {
+        throw new Error(`yt-dlp unavailable: ${error?.message || error}`);
+      }
+    })();
+  }
+  return ytDlpBinaryPromise;
+}
+
+const mediaFooter = () => `> ${config.botName}`;
+async function sendMediaFooter(sock, from) {
+  await sock.sendMessage(from, { text: mediaFooter() });
+}
+
 async function downloadWithYtDlp(input, kind) {
   const url = await resolveYouTube(input);
   const ext = kind === "audio" ? "mp3" : "mp4";
@@ -1045,7 +1084,7 @@ async function downloadWithYtDlp(input, kind) {
   const output = `${base}.${ext}`;
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
-    const binary = fs.existsSync("/opt/yt-dlp/bin/yt-dlp") ? "/opt/yt-dlp/bin/yt-dlp" : "yt-dlp";
+    const binary = await getYtDlpBinary();
     const clients = ["tv_embedded", "web_safari", "android", "web_creator"];
     let lastError;
     for (const client of clients) {
@@ -1084,9 +1123,13 @@ mk("ytmp4", async ({ sock, from, args }) => {
   const input = args.join(" ");
   try {
     const media = await downloadWithYtDlp(input, "video");
-    await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title}` });
+    await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title}
+
+${mediaFooter()}` });
   } catch (primary) {
-    try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}` }); }
+    try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}
+
+${mediaFooter()}` }); }
     catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
   }
 });
@@ -1096,8 +1139,10 @@ mk("ytmp3", async ({ sock, from, args }) => {
   try {
     const media = await downloadWithYtDlp(input, "audio");
     await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
+    await sendMediaFooter(sock, from);
   } catch {
-    try { const f = await legacyYouTube(input, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
+    try { const f = await legacyYouTube(input, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false });
+      await sendMediaFooter(sock, from); }
     catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
   }
 });
@@ -1107,8 +1152,10 @@ mk("song", async ({ sock, from, args }) => {
   try {
     const media = await downloadWithYtDlp(q, "audio");
     await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
+    await sendMediaFooter(sock, from);
   } catch {
-    try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false }); }
+    try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false });
+      await sendMediaFooter(sock, from); }
     catch { throw new Error("YouTube is rate-limiting downloads right now. Please try again in a few minutes."); }
   }
 });

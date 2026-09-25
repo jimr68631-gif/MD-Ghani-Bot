@@ -232,6 +232,26 @@ let shuttingDown = false;
 const deletedMessageCache = new Map();
 // Keep recent full messages available for Baileys retry/decryption requests.
 const messageRetryCache = new Map();
+function messageCacheKeys(key) {
+  const id = key?.id;
+  if (!id) return [];
+  return [...new Set([
+    key?.remoteJid,
+    key?.remoteJidAlt,
+    key?.participant,
+    key?.participantAlt,
+  ].filter(Boolean).map((jid) => `${jid}:${id}`))];
+}
+function cacheMessage(cache, msg) {
+  for (const cacheKey of messageCacheKeys(msg?.key)) cache.set(cacheKey, msg);
+}
+function findCachedMessage(key) {
+  for (const cacheKey of messageCacheKeys(key)) {
+    const cached = messageRetryCache.get(cacheKey) || deletedMessageCache.get(cacheKey);
+    if (cached) return cached?.message || cached;
+  }
+  return undefined;
+}
 const warningState = new Map();
 let baileysVersionPromise;
 
@@ -292,9 +312,7 @@ async function startSession(sessionId, phoneNumber) {
     generateHighQualityLinkPreview: true,
     defaultQueryTimeoutMs: undefined,
     getMessage: async (key) => {
-      const cacheKey = `${key?.remoteJid}:${key?.id}`;
-      const cached = messageRetryCache.get(cacheKey) || deletedMessageCache.get(cacheKey);
-      return cached?.message || cached;
+      return findCachedMessage(key);
     },
   });
 
@@ -392,9 +410,8 @@ function wireHandlers(sessionId) {
     const toggles = getToggles(sessionId);
     for (const msg of messages) {
       if (!msg.message) continue;
-      const messageKey = `${msg.key.remoteJid}:${msg.key.id}`;
-      deletedMessageCache.set(messageKey, msg);
-      messageRetryCache.set(messageKey, msg);
+      cacheMessage(deletedMessageCache, msg);
+      cacheMessage(messageRetryCache, msg);
       if (deletedMessageCache.size > 1000) deletedMessageCache.delete(deletedMessageCache.keys().next().value);
       if (messageRetryCache.size > 5000) messageRetryCache.delete(messageRetryCache.keys().next().value);
       Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
@@ -429,9 +446,8 @@ function wireHandlers(sessionId) {
       const deletedChat = deletedKey?.remoteJid;
       const deletedId = deletedKey?.id;
       if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(deletedChat.endsWith("@g.us") ? deletedChat : sessionId).antidelete) {
-        const old = deletedMessageCache.get(`${deletedChat}:${deletedId}`);
+        const old = findCachedMessage(deletedKey);
         if (!old) continue;
-        deletedMessageCache.delete(`${deletedChat}:${deletedId}`);
         const oldMessage = unwrapMessage(old.message);
         const source = deletedChat;
         const originalSender = await resolveOriginalJid(sock, old.key?.participantAlt || old.key?.participant || old.key?.remoteJid || "Unknown");

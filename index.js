@@ -105,7 +105,7 @@ const config = {
   owner: [(process.env.OWNER_NUMBER || "923000000000") + "@s.whatsapp.net"],
   prefix: ".",
   channelJid: "120363429085670060@newsletter",
-  channelLink: "https://whatsapp.com/channel/120363429085670060",
+  channelLink: "https://whatsapp.com/channel/0029Vb8vvB1Fcow4AY0NeC1p",
   pairingTimeout: 60000,
   browser: ["Windows", "Chrome", "Chrome 114.0.5735.198"],
   alwaysOnline: true,
@@ -2738,7 +2738,7 @@ const PAIR_HTML = `<!DOCTYPE html>
 
     <!-- BUTTON #2 : JOIN CHANNEL -->
     <div class="btn-wrap" style="margin-top:18px">
-      <a href="https://whatsapp.com/channel/120363429085670060"
+      <a href="https://whatsapp.com/channel/0029Vb8vvB1Fcow4AY0NeC1p"
          onclick="openChannel(event)"
          target="_blank"
          rel="noopener"

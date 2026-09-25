@@ -1696,14 +1696,28 @@ app.post("/pair", async (req, res) => {
   pair.got(sessionId);
   try {
     const active = sessions.get(sessionId);
-    if (active?.sock && !active.sock.authState?.creds?.registered) {
-      try { active.sock.ws?.close(); } catch {}
-      sessions.delete(sessionId);
-      fs.rmSync(`${config.sessionDir}/${sessionId}`, { recursive: true, force: true });
+    // Only report "already connected" for a socket that is actually online.
+    // A registered flag can remain in saved auth after a crash/restart, and
+    // treating that stale state as a live connection prevents new pairing codes.
+    if (active?.sock?.user && active.sock.authState?.creds?.registered) {
+      return res.json({ ok: true, code: "ALREADY_CONNECTED", sessionId });
     }
+
+    // Pairing from the web panel must start with a clean auth state. Remove
+    // stale/in-progress sessions so startSession cannot return code: null.
+    try { active?.sock?.ws?.close(); } catch {}
+    if (active?.reconnectTimer) clearTimeout(active.reconnectTimer);
+    sessions.delete(sessionId);
+    fs.rmSync(`${config.sessionDir}/${sessionId}`, { recursive: true, force: true });
+
     const out = await startSession(sessionId, sessionId);
     if (out.ok && out.code) return res.json({ ok: true, code: out.code, sessionId });
-    if (out.ok) return res.json({ ok: true, code: "ALREADY_CONNECTED", sessionId });
+    if (out.ok) {
+      return res.status(409).json({
+        ok: false,
+        error: "Pairing session did not return a code. Please retry.",
+      });
+    }
     pair.fail(out.error);
     res.status(500).json({ ok: false, error: out.error });
   } catch (e) {

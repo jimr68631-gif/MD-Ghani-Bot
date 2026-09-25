@@ -216,6 +216,11 @@ const isOn = (id, key) => !!getToggles(id)[key];
 const styledToggleReply = (name, enabled, detail = "") => `╭━━━❰ *${String(name).toUpperCase()}* ❱━━━╮
 ┃ ${enabled ? "🟢 Status: ON ✅" : "🔴 Status: OFF ❌"}
 ${detail ? `┃ 📝 ${detail}\n` : ""}╰━━━━━━━━━━━━━━━━━━━━╯`;
+const professionalizeReply = (text) => {
+  const value = String(text ?? "");
+  if (!value.trim() || value.includes("╭━━━❰") || value.includes("╭━━━━━━❰")) return value;
+  return `╭━━━❰ *${config.botName.toUpperCase()}* ❱━━━╮\n${value.split("\n").map((line) => `┃ ${line}`).join("\n")}\n╰━━━━━━━━━━━━━━━━━━━━╯`;
+};
 
 /* ============================================================
  *  4. COMMAND REGISTRY + SESSIONS
@@ -738,7 +743,18 @@ async function handleMessage(sock, msg, sessionId) {
     }
 
     try {
-      await cmd.run({ sock, msg, from, args, sessionId, text: commandText, cmdName });
+      const originalSendMessage = sock.sendMessage;
+      sock.sendMessage = async (jid, content, ...sendArgs) => {
+        if (content && typeof content.text === "string") {
+          content = { ...content, text: professionalizeReply(content.text) };
+        }
+        return originalSendMessage.call(sock, jid, content, ...sendArgs);
+      };
+      try {
+        await cmd.run({ sock, msg, from, args, sessionId, text: commandText, cmdName });
+      } finally {
+        sock.sendMessage = originalSendMessage;
+      }
     } catch (e) {
       log.error(`cmd ${cmdName}: ${e?.stack || e}`);
       await sock.sendMessage(from, { text: `╭━━━❰ *COMMAND ERROR* ❱━━━╮\n┃ ❌ Command: *${cmdName}*\n┃ 📝 ${e?.message || "Please try again"}\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
@@ -827,7 +843,19 @@ ${lines.join("\n")}`;
     text: heading, mentions,
   });
 });
-mk("tag", async (p) => commands.get("tagall").run(p));
+mk("tag", async ({ sock, from, msg, args }) => {
+  const target = getTargetJid(msg, args);
+  if (!target) {
+    return sock.sendMessage(from, {
+      text: "╭━━━❰ *TAG COMMAND* ❱━━━╮\n┃ ❌ Reply to or mention one member.\n┃ 💡 Usage: .tag @member\n╰━━━━━━━━━━━━━━━━━━━━╯",
+    });
+  }
+  const message = args.filter((arg) => !/^\d+$/.test(arg)).join(" ") || "You have been tagged.";
+  await sock.sendMessage(from, {
+    text: `╭━━━❰ *MEMBER TAGGED* ❱━━━╮\n┃ 👤 @${target.split("@")[0]}\n┃ 📝 ${message}\n╰━━━━━━━━━━━━━━━━━━━━╯`,
+    mentions: [target],
+  });
+});
 mk("hidetag", async ({ sock, from, args }) => {
   const md = await sock.groupMetadata(from);
   await sock.sendMessage(from, { text: args.join(" ") || " ", mentions: md.participants.map((p) => p.id) });
@@ -969,15 +997,14 @@ register("botstatus", {
     const status = botIsAdmin ? "🟢 ACTIVE" : "🔴 INACTIVE — Bot is not group admin";
     const text = `╭━━━❰ *BOT STATUS* ❱━━━╮
 ┃ ${status}
-┃ 📍 Group ID: ${from}
-┃ 🛡️ Bot Admin: ${botIsAdmin ? "YES ✅" : "NO ❌"}
+┃ 🛡️ Bot Admin: ${botIsAdmin ? "YES" : "NO"}
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
-⚔️ *Anti-Features ON (${anti.length})*
-${anti.length ? anti.sort().map((name) => `✅ ${config.prefix}${name}`).join("\n") : "❌ No anti-feature is ON"}
+⚔️ *Anti-Features Active (${anti.length})*
+${anti.length ? anti.sort().map((name) => `▸ ${config.prefix}${name}`).join("\n") : "▸ None active"}
 
 🧰 *Normal Commands Available (${enabled.length})*
-${enabled.length ? enabled.sort().map((name) => `✅ ${config.prefix}${name}`).join("\n") : "❌ No normal command is ON"}`;
+${enabled.length ? enabled.sort().map((name) => `▸ ${config.prefix}${name}`).join("\n") : "▸ None available"}`;
     for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) await sock.sendMessage(from, { text: part });
   },
 });

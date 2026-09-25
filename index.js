@@ -3277,22 +3277,11 @@ function openChannel(e){
 
   setTimeout(() => Sound.success(), 200);
 
-  const channelId = '120363429085670060';
+  const channelId = '0029Vb8vvB1Fcow4AY0NeC1p';
   const httpsLink = 'https://whatsapp.com/channel/' + channelId;
-  const appLink   = 'whatsapp://channel/' + channelId;
-  const isMobile  = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-
-  if (isMobile){
-    const start = Date.now();
-    window.location.href = appLink;
-    setTimeout(() => {
-      if (Date.now() - start < 1500 && !document.hidden){
-        window.open(httpsLink, '_blank');
-      }
-    }, 800);
-  } else {
-    window.open(httpsLink, '_blank');
-  }
+  // Open the valid HTTPS invite URL directly; the whatsapp://channel
+  // deep-link rejects invite-token links on many devices.
+  window.open(httpsLink, '_blank', 'noopener');
 }
 </script>
 </body>

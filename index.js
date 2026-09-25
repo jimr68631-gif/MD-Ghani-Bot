@@ -672,6 +672,11 @@ async function handleMessage(sock, msg, sessionId) {
     if (OWNER_ONLY_SILENT_COMMANDS.has(normalizedCommand) && !isController(sock, from, msg, sessionId)) return;
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
+    // Group members must not be able to operate the bot. Only the connected
+    // owner may use commands in any group where this bot is present.
+    if (groupChat && !controller) {
+      return sock.sendMessage(from, { text: "🚫 Commands are available only to the connected bot owner." }).catch(() => {});
+    }
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
     if (groupChat && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
     let cmd = commands.get(normalizedCommand);

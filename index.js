@@ -675,7 +675,7 @@ async function handleMessage(sock, msg, sessionId) {
     // Group members must not be able to operate the bot. Only the connected
     // owner may use commands in any group where this bot is present.
     if (groupChat && !controller) {
-      return sock.sendMessage(from, { text: "🚫 Commands are available only to the connected bot owner." }).catch(() => {});
+      return sock.sendMessage(from, { text: "╭━━━❰ *ACCESS RESTRICTED* ❱━━━╮\n┃ 🚫 This command is restricted.\n┃ 👑 Only the connected bot owner can use commands here.\n╰━━━━━━━━━━━━━━━━━━━━╯" }).catch(() => {});
     }
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
     if (groupChat && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;

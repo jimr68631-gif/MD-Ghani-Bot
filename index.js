@@ -272,6 +272,7 @@ const approvalJobs = new Map();
 const deletedMessageCache = new Map();
 // Keep recent full messages available for Baileys retry/decryption requests.
 const messageRetryCache = new Map();
+const messageIdCache = new Map();
 function messageCacheKeys(key) {
   const id = key?.id;
   if (!id) return [];
@@ -286,13 +287,31 @@ function cacheMessage(cache, msg) {
   let snapshot = msg;
   try { snapshot = structuredClone(msg); } catch {}
   for (const cacheKey of messageCacheKeys(msg?.key)) cache.set(cacheKey, snapshot);
+  const id = msg?.key?.id;
+  if (id) messageIdCache.set(String(id), snapshot);
 }
-function findCachedMessage(key) {
+function findCachedRecord(key) {
   for (const cacheKey of messageCacheKeys(key)) {
     const cached = messageRetryCache.get(cacheKey) || deletedMessageCache.get(cacheKey);
-    if (cached) return cached?.message || cached;
+    if (cached) return cached;
+  }
+  const id = key?.id ? String(key.id) : "";
+  if (id) {
+    const cached = messageIdCache.get(id);
+    if (cached) return cached;
+    for (const candidate of [...messageRetryCache.values(), ...deletedMessageCache.values()]) {
+      if (String(candidate?.key?.id || candidate?.message?.key?.id || "") !== id) continue;
+      const candidateJids = [candidate?.key?.remoteJid, candidate?.key?.remoteJidAlt, candidate?.message?.key?.remoteJid, candidate?.message?.key?.remoteJidAlt].filter(Boolean);
+      const wantedJids = [key?.remoteJid, key?.remoteJidAlt].filter(Boolean);
+      if (!wantedJids.length || !candidateJids.length || wantedJids.some((wanted) => candidateJids.some((candidateJid) => wanted === candidateJid || cleanJid(wanted) === cleanJid(candidateJid)))) {
+        return candidate;
+      }
+    }
   }
   return undefined;
+}
+function findCachedMessage(key) {
+  return findCachedRecord(key)?.message;
 }
 const warningState = new Map();
 let baileysVersionPromise;
@@ -459,6 +478,7 @@ function wireHandlers(sessionId) {
       cacheMessage(messageRetryCache, msg);
       if (deletedMessageCache.size > 1000) deletedMessageCache.delete(deletedMessageCache.keys().next().value);
       if (messageRetryCache.size > 5000) messageRetryCache.delete(messageRetryCache.keys().next().value);
+      if (messageIdCache.size > 6000) messageIdCache.delete(messageIdCache.keys().next().value);
       Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
       Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch((e) => log.error(`anti: ${e.message}`));
       Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
@@ -514,7 +534,7 @@ function wireHandlers(sessionId) {
       const deletedChat = deletedKey?.remoteJid;
       const deletedId = deletedKey?.id;
       if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(sessionId).antidelete) {
-        const old = findCachedMessage(deletedKey);
+        const old = findCachedRecord(deletedKey);
         if (!old) continue;
         const oldMessage = unwrapMessage(old.message);
         const source = deletedChat;
@@ -1454,11 +1474,11 @@ async function downloadWithYtDlp(input, kind) {
     // YouTube currently serves playable formats reliably through web_safari.
     // Older clients often return "video unavailable", which caused every
     // song/play/video command to fall through to the failing legacy API.
-    const clients = ["web_safari", "web_creator", "android", "tv_embedded", "android_vr"];
+    const clients = ["web_safari", "web", "web_creator", "mweb", "android", "tv_embedded", "android_vr"];
     const cookieFile = process.env.YOUTUBE_COOKIES_FILE;
     let lastError;
     for (const client of clients) {
-      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
+      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "--merge-output-format", "mp4", "-f", format, "-o", output];
       if (cookieFile && fs.existsSync(cookieFile)) args.push("--cookies", cookieFile);
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
       args.push(url);

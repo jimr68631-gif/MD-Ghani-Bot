@@ -136,9 +136,11 @@ const defaultToggles = {
   antilink: false, antilocation: false, antimessage: false, antipoll: false,
   antistatus: false, antisticker: false, antitag: false, antitagadmin: false,
   antivideo: false, antivoice: false, antistatuslinkkick: false,
+  antispam: false, antiflood: false, antiraid: false, antiinvite: false,
   autoreact: false, autoseen: false, autoreactstatus: false,
   autorecording: false, autorecordtyping: false, autosavestatus: false,
   autotyping: false, autoviewstatus: false,
+  autoreply: false,
   alwaysonline: true,
   antilinkAction: "delete",
 };
@@ -162,6 +164,8 @@ const pair = {
 const toggleState = new Map();
 const groupMessageSettings = new Map();
 const antiWarningCounts = new Map();
+const spamState = new Map();
+const raidState = new Map();
 const antiWarningStyles = [
   (user, key) => `⚠️ *WARNING (1/3)*\n👤 ${user} — *${key}* is not allowed in this group.\nPlease do not repeat it.`,
   (user, key) => `╭━━━❰ ⚠️ WARNING 2/3 ❱━━━╮\n┃ 👤 ${user}\n┃ *${key}* is not allowed here.\n┃ Next violation will remove you.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
@@ -181,6 +185,8 @@ const getGroupMessageSettings = (group) => {
     groupMessageSettings.set(group, {
       welcome: "🎉 Welcome {user} to {group}. You are member #{count}.",
       goodbye: "👋 Goodbye {user} from {group}. You are member #{count}.",
+      rules: "No group rules have been set yet.",
+      autoreply: "Thanks for your message.",
       welcomeEnabled: false,
       goodbyeEnabled: false,
     });
@@ -461,6 +467,18 @@ function wireHandlers(sessionId) {
     if (!id?.endsWith("@g.us") || !["add", "remove", "leave"].includes(action)) return;
     try {
       groupMetadataCache.delete(id);
+      if (action === "add" && getToggles(id).antiraid && participants?.length) {
+        const now = Date.now();
+        const recent = (raidState.get(id) || []).filter((time) => now - time < 60000);
+        recent.push(...participants.map(() => now));
+        raidState.set(id, recent);
+        if (recent.length >= 3 && await isBotAdmin(sock, id)) {
+          for (const participant of participants) await sock.groupParticipantsUpdate(id, [participant], "remove").catch(() => {});
+          await sock.sendMessage(id, { text: "🛡️ Anti-raid active: rapid member additions were removed." }).catch(() => {});
+          raidState.delete(id);
+          return;
+        }
+      }
       const md = await sock.groupMetadata(id);
       const settings = getGroupMessageSettings(id);
       if (action === "add" && !settings.welcomeEnabled) return;
@@ -479,6 +497,17 @@ function wireHandlers(sessionId) {
   sock.ev.on("messages.update", async (updates) => {
     const botInbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
     for (const item of updates || []) {
+      const edited = item.update?.message?.protocolMessage?.type === 14;
+      const editedKey = item.update?.message?.protocolMessage?.key || item.key;
+      if (edited && editedKey?.remoteJid?.endsWith("@g.us") && getToggles(sessionId).antiedit) {
+        const old = findCachedMessage(editedKey);
+        const before = unwrapMessage(old?.message);
+        const after = unwrapMessage(item.update?.message?.protocolMessage?.editedMessage);
+        const beforeText = before?.conversation || before?.extendedTextMessage?.text || before?.imageMessage?.caption || before?.videoMessage?.caption || "[media]";
+        const afterText = after?.conversation || after?.extendedTextMessage?.text || after?.imageMessage?.caption || after?.videoMessage?.caption || "[media]";
+        const sender = editedKey.participant || editedKey.remoteJid;
+        await sock.sendMessage(botInbox, { text: `✏️ *ANTIEDIT REPORT*\n\n👤 User: ${displayUser(sender)}\n📌 Group: ${editedKey.remoteJid}\n\n↩️ Before:\n${beforeText}\n\n✍️ After:\n${afterText}` }).catch(() => {});
+      }
       const revoke = item.update?.message?.protocolMessage?.type === 0;
       const deletedKey = item.update?.message?.protocolMessage?.key || item.key;
       const deletedChat = deletedKey?.remoteJid;
@@ -587,6 +616,12 @@ async function runAuto(sock, msg, sessionId, toggles) {
   if (!from) return;
   if (from.endsWith("@g.us") && !(await isBotAdmin(sock, from))) return;
   toggles = from.endsWith("@g.us") ? getToggles(from) : getToggles(sessionId);
+  const autoMessage = unwrapMessage(msg.message);
+  const autoText = autoMessage?.conversation || autoMessage?.extendedTextMessage?.text || "";
+  if (toggles.autoreply && !msg.key.fromMe && autoText && !autoText.startsWith(config.prefix)) {
+    const reply = from.endsWith("@g.us") ? getGroupMessageSettings(from).autoreply : "Thanks for your message.";
+    sock.sendMessage(from, { text: `🤖 ${reply}` }).catch(() => {});
+  }
   if (toggles.autoseen) sock.readMessages([msg.key]).catch(() => {});
   if (toggles.autotyping && !msg.key.fromMe) {
     sock.sendPresenceUpdate("composing", from).catch(() => {});
@@ -636,7 +671,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
   if (!(await isBotAdmin(sock, from))) return;
   toggles = getToggles(from);
 
-  const antiKeys = ["antilink", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
+  const antiKeys = ["antilink", "antiinvite", "antispam", "antiflood", "antiraid", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
   if (!antiKeys.some((key) => toggles[key])) return;
 
   const sender = msg.key.participant || from;
@@ -647,8 +682,26 @@ async function runAnti(sock, msg, sessionId, toggles) {
   const isAdmin = await isUserAdmin(sock, from, sender);
   if (isAdmin) return;
 
+  const now = Date.now();
+  const spamKey = `${from}:${sender}`;
+  const spam = spamState.get(spamKey) || { times: [], texts: [] };
+  spam.times = spam.times.filter((time) => now - time < 10000);
+  spam.texts = spam.texts.filter((item) => now - item.time < 10000);
+  spam.times.push(now);
+  spam.texts.push({ time: now, text: text.trim().toLowerCase() });
+  spamState.set(spamKey, spam);
+  if (toggles.antispam && spam.times.length >= 5) {
+    await takeAction(sock, from, sender, msg, "antispam");
+    return;
+  }
+  if (toggles.antiflood && spam.texts.filter((item) => item.text === text.trim().toLowerCase()).length >= 3) {
+    await takeAction(sock, from, sender, msg, "antiflood");
+    return;
+  }
+
   const checks = [
     ["antilink", () => LINK_RE.test(text)],
+    ["antiinvite", () => /chat\.whatsapp\.com\//i.test(text)],
     ["antibadword", () => BAD_WORDS.some((w) => text.toLowerCase().includes(w))],
     ["antisticker", () => !!msg.message?.stickerMessage],
     ["antiimage", () => !!msg.message?.imageMessage],
@@ -997,6 +1050,66 @@ mk("listblocked", async ({ sock, from }) => {
 });
 mk("listinactive", async ({ sock, from }) => sock.sendMessage(from, { text: "📋 Inactive list" }));
 mk("listrequest", async ({ sock, from }) => sock.sendMessage(from, { text: "📥 Pending requests" }));
+mk("rules", async ({ sock, from }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const md = await sock.groupMetadata(from);
+  const rules = getGroupMessageSettings(from).rules;
+  await sock.sendMessage(from, { text: `╭━━━❰ *${md.subject || "GROUP"} RULES* ❱━━━╮\n┃ 📜 ${rules.replace(/\n/g, "\n┃ ")}\n╰━━━━━━━━━━━━━━━━━━━━╯` });
+});
+mk("setrules", async ({ sock, from, msg, args }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  const rules = args.join(" ").trim();
+  if (!rules) return sock.sendMessage(from, { text: "Usage: .setrules <group rules>" });
+  getGroupMessageSettings(from).rules = rules;
+  await sock.sendMessage(from, { text: `✅ Group rules updated.\n\n📜 ${rules}` });
+});
+mk("pending", async ({ sock, from }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const requests = await sock.groupRequestParticipantsList(from);
+  if (!requests?.length) return sock.sendMessage(from, { text: "📥 No pending join requests." });
+  const lines = requests.map((request, index) => `${index + 1}. +${cleanJid(request?.jid || request?.id) || "Unknown"}`);
+  await sock.sendMessage(from, { text: `📥 *PENDING JOIN REQUESTS (${requests.length})*\n\n${lines.join("\n")}\n\nUse .approve or .reject <number>.` });
+});
+mk("reject", async ({ sock, from, msg, args }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  const wanted = String(args[0] || "").replace(/\D/g, "");
+  if (!wanted) return sock.sendMessage(from, { text: "Usage: .reject <number>" });
+  const requests = await sock.groupRequestParticipantsList(from);
+  const request = (requests || []).find((item) => cleanJid(item?.jid || item?.id) === wanted);
+  if (!request) return sock.sendMessage(from, { text: "📥 No matching pending join request found." });
+  const jid = request.jid || request.id;
+  await sock.groupRequestParticipantsUpdate(from, [jid], "reject");
+  await sock.sendMessage(from, { text: `✅ Join request +${wanted} rejected.` });
+});
+mk("rejectall", async ({ sock, from, msg }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  const requests = await sock.groupRequestParticipantsList(from);
+  if (!requests?.length) return sock.sendMessage(from, { text: "📥 No pending join requests." });
+  let rejected = 0;
+  for (const request of requests) {
+    const jid = request?.jid || request?.id;
+    if (!jid) continue;
+    await sock.groupRequestParticipantsUpdate(from, [jid], "reject");
+    rejected += 1;
+  }
+  await sock.sendMessage(from, { text: `✅ Rejected ${rejected} pending join request(s).` });
+});
+mk("admins", async ({ sock, from }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const md = await sock.groupMetadata(from);
+  const admins = md.participants.filter((participant) => participant.admin).map((participant, index) => `${index + 1}. ${displayUser(participant.id, participant)}`);
+  await sock.sendMessage(from, { text: `👑 *GROUP ADMINS*\n\n${admins.join("\n") || "No admins found."}` });
+});
+mk("groupstats", async ({ sock, from }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const md = await sock.groupMetadata(from);
+  const admins = md.participants.filter((participant) => participant.admin).length;
+  const settings = getGroupMessageSettings(from);
+  await sock.sendMessage(from, { text: `📊 *GROUP STATISTICS*\n\n📛 Name: ${md.subject || "Unknown"}\n👥 Members: ${md.participants.length}\n👑 Admins: ${admins}\n🟢 Welcome: ${settings.welcomeEnabled ? "ON" : "OFF"}\n🟢 Goodbye: ${settings.goodbyeEnabled ? "ON" : "OFF"}\n📜 Rules: ${settings.rules === "No group rules have been set yet." ? "NOT SET" : "SET"}` });
+});
 register("approve", { toggle: null, owner: true, run: async ({ sock, from, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   if (approvalJobs.has(from)) return sock.sendMessage(from, { text: "⏳ An approval process is already running. Use .cancelapprove to stop it." });
@@ -1057,8 +1170,9 @@ const ANTI_LIST = [
   "antipromote","antidocument","antiedit","antiforward","antigif","antiimage",
   "antilink","antilocation","antimessage","antipoll","antistatus","antisticker",
   "antitag","antitagadmin","antivideo","antivoice","antistatuslinkkick",
+  "antispam","antiflood","antiraid","antiinvite",
 ];
-const AUTO_LIST = ["autoseen", "autotyping", "autorecording", "autoreact", "autoviewstatus", "autoreactstatus", "autosavestatus", "autoreacttyping", "autorecordtyping"];
+const AUTO_LIST = ["autoseen", "autotyping", "autorecording", "autoreact", "autoviewstatus", "autoreactstatus", "autosavestatus", "autoreacttyping", "autorecordtyping", "autoreply"];
 for (const name of AUTO_LIST) {
   register(name, {
     toggle: null,
@@ -1148,6 +1262,44 @@ ${anti.length ? anti.sort().map((name) => `▸ ${config.prefix}${name}`).join("\
 🧰 *Normal Commands Available (${enabled.length})*
 ${enabled.length ? enabled.sort().map((name) => `▸ ${config.prefix}${name}`).join("\n") : "▸ None available"}`;
     for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) await sock.sendMessage(from, { text: part });
+  },
+});
+register("settings", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const toggles = getToggles(from);
+    const group = from.endsWith("@g.us") ? getGroupMessageSettings(from) : null;
+    const enabled = Object.entries(toggles).filter(([, value]) => value === true).map(([name]) => name);
+    const text = `╭━━━❰ *GROUP SETTINGS* ❱━━━╮
+┃ 🛡️ Security ON: ${enabled.length}
+┃ 🎉 Welcome: ${group ? (group.welcomeEnabled ? "ON" : "OFF") : "N/A"}
+┃ 👋 Goodbye: ${group ? (group.goodbyeEnabled ? "ON" : "OFF") : "N/A"}
+┃ 📜 Rules: ${group && group.rules !== "No group rules have been set yet." ? "SET" : "NOT SET"}
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+${enabled.length ? `🟢 *Enabled Features*\n${enabled.map((name) => `▸ ${name}`).join("\n")}` : "🔴 No security/auto features enabled."}`;
+    await sock.sendMessage(from, { text });
+  },
+});
+register("resetsettings", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    toggleState.delete(from);
+    groupMessageSettings.delete(from);
+    antiWarningCounts.delete(from);
+    await sock.sendMessage(from, { text: "✅ Group settings reset to defaults. Existing session-wide owner settings were not changed." });
+  },
+});
+register("securitystatus", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    const toggles = getToggles(from);
+    const antiLines = ANTI_LIST.map((name) => `▸ ${name}: ${toggles[name] ? "🟢 ON" : "🔴 OFF"}`);
+    const autoLines = AUTO_LIST.map((name) => `▸ ${name}: ${toggles[name] ? "🟢 ON" : "🔴 OFF"}`);
+    await sock.sendMessage(from, { text: `🛡️ *SECURITY STATUS*\n\n⚔️ *Anti Features*\n${antiLines.join("\n")}\n\n⚙️ *Auto Features*\n${autoLines.join("\n")}` });
   },
 });
 
@@ -1609,11 +1761,68 @@ const mkOwner = (n, fn) => register(n, {
   },
 });
 mkOwner("mode", async ({ sock, from, args }) => sock.sendMessage(from, { text: `⚙️ Mode: *${args[0] || "public"}*` }));
+mkOwner("setprefix", async ({ sock, from, args }) => {
+  const prefix = String(args[0] || "").trim();
+  if (!prefix || /\s/.test(prefix) || prefix.length > 3) return sock.sendMessage(from, { text: "Usage: .setprefix <1-3 character prefix>" });
+  config.prefix = prefix;
+  await sock.sendMessage(from, { text: `✅ Command prefix changed to: *${config.prefix}*` });
+});
+mkOwner("session", async ({ sock, from }) => {
+  const active = [...sessions.entries()].map(([id, session]) => `• ${id}: ${session.sock?.user ? "CONNECTED" : "STARTING"}`);
+  await sock.sendMessage(from, { text: `🔐 *SESSION STATUS*\n\n${active.join("\n") || "No active sessions."}` });
+});
+mkOwner("backup", async ({ sock, from }) => {
+  const backup = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    prefix: config.prefix,
+    toggles: Object.fromEntries(toggleState),
+    groupSettings: Object.fromEntries(groupMessageSettings),
+  };
+  const file = path.join(config.sessionDir, "md-ghani-settings-backup.json");
+  await fs.promises.mkdir(config.sessionDir, { recursive: true });
+  await fs.promises.writeFile(file, JSON.stringify(backup, null, 2));
+  await sock.sendMessage(from, { document: Buffer.from(JSON.stringify(backup, null, 2)), mimetype: "application/json", fileName: "md-ghani-settings-backup.json", caption: "✅ Settings backup created." });
+});
+mkOwner("restore", async ({ sock, from }) => {
+  const file = path.join(config.sessionDir, "md-ghani-settings-backup.json");
+  if (!fs.existsSync(file)) return sock.sendMessage(from, { text: "❌ No settings backup found. Use .backup first." });
+  const backup = JSON.parse(await fs.promises.readFile(file, "utf8"));
+  if (backup.prefix) config.prefix = String(backup.prefix);
+  toggleState.clear();
+  for (const [id, values] of Object.entries(backup.toggles || {})) toggleState.set(id, { ...defaultToggles, ...values });
+  groupMessageSettings.clear();
+  for (const [id, values] of Object.entries(backup.groupSettings || {})) groupMessageSettings.set(id, values);
+  await sock.sendMessage(from, { text: "✅ Settings restored from the latest backup." });
+});
+mkOwner("restart", async ({ sock, from }) => {
+  await sock.sendMessage(from, { text: "♻️ Restarting bot safely. Please wait for reconnection." });
+  setTimeout(() => process.exit(0), 800);
+});
 mkOwner("public", async ({ sock, from }) => sock.sendMessage(from, { text: styledToggleReply("public mode", true, "Bot is available to users") }));
 mkOwner("private", async ({ sock, from }) => sock.sendMessage(from, { text: styledToggleReply("private mode", true, "Bot is restricted") }));
-mkOwner("approve", async ({ sock, from, msg }) => {
-  const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
-  if (t) await sock.sendMessage(from, { text: `✅ @${t.split("@")[0]} approved`, mentions: [t] });
+mkOwner("approve", async ({ sock, from, args }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  if (approvalJobs.has(from)) return sock.sendMessage(from, { text: "⏳ An approval process is already running. Use .cancelapprove to stop it." });
+  const requests = await sock.groupRequestParticipantsList(from);
+  const wanted = String(args[0] || "all").replace(/\D/g, "");
+  const pending = (requests || []).filter((request) => !wanted || wanted === "all" || cleanJid(request?.jid || request?.id) === wanted);
+  if (!pending.length) return sock.sendMessage(from, { text: "📥 No matching pending join request found." });
+  const job = { cancelled: false };
+  approvalJobs.set(from, job);
+  let approved = 0;
+  try {
+    for (const request of pending) {
+      if (job.cancelled) break;
+      const jid = request?.jid || request?.id;
+      if (!jid) continue;
+      await sock.groupRequestParticipantsUpdate(from, [jid], "approve");
+      approved += 1;
+    }
+    await sock.sendMessage(from, { text: job.cancelled ? `🛑 Approval cancelled. Approved ${approved}/${pending.length} request(s) before cancellation.` : `✅ Approved ${approved} pending request(s).` });
+  } finally {
+    if (approvalJobs.get(from) === job) approvalJobs.delete(from);
+  }
 });
 mkOwner("disapprove", async ({ sock, from, msg }) => {
   const t = msg.message?.extendedTextMessage?.contextInfo?.participant;
@@ -1704,6 +1913,13 @@ register("setgoodbye", { toggle: null, run: async ({ sock, from, args }) => {
   const message = args.join(" ") || "👋 Goodbye";
   settings.goodbye = `${message} {user} from {group}. You are member #{count}.`;
   await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nOrder: message → user → group name → You are member #count` });
+}});
+register("setautoreply", { toggle: null, run: async ({ sock, from, msg, args }) => {
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  const reply = args.join(" ").trim();
+  if (!reply) return sock.sendMessage(from, { text: "Usage: .setautoreply <reply text>" });
+  getGroupMessageSettings(from).autoreply = reply;
+  await sock.sendMessage(from, { text: `✅ Autoreply text updated:\n${reply}\n\nUse .autoreply on/off to control it.` });
 }});
 register("welcome", { toggle: null, run: async ({ sock, from, msg, args, sessionId }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });

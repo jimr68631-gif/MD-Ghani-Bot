@@ -965,6 +965,18 @@ mk("close", async ({ sock, from, msg }) => {
   await sock.groupSettingUpdate(from, "announcement");
   await sock.sendMessage(from, { text: "✅ Group closed. Only admins can send messages now." });
 });
+async function updateGroupPrivacy(sock, from, msg, setting, enabledText, disabledText) {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  await sock.groupSettingUpdate(from, setting);
+  await sock.sendMessage(from, { text: enabledText || disabledText });
+}
+mk("restrict", async ({ sock, from, msg }) => updateGroupPrivacy(sock, from, msg, "locked", "✅ Group restricted. Only admins can edit group info.", ""));
+mk("unrestrict", async ({ sock, from, msg }) => updateGroupPrivacy(sock, from, msg, "unlocked", "✅ Group privacy opened. Members can edit group info.", ""));
+mk("lock", async ({ sock, from, msg }) => updateGroupPrivacy(sock, from, msg, "announcement", "✅ Group locked. Only admins can send messages.", ""));
+mk("unlock", async ({ sock, from, msg }) => updateGroupPrivacy(sock, from, msg, "not_announcement", "✅ Group unlocked. All members can send messages.", ""));
+mk("announcement", async ({ sock, from, msg }) => updateGroupPrivacy(sock, from, msg, "announcement", "✅ Announcement mode enabled. Only admins can send messages.", ""));
+mk("unannouncement", async ({ sock, from, msg }) => updateGroupPrivacy(sock, from, msg, "not_announcement", "✅ Announcement mode disabled. All members can send messages.", ""));
 mk("groupinfo", async ({ sock, from }) => {
   const md = await sock.groupMetadata(from);
   const admins = md.participants.filter((p) => p.admin).map((p) => displayUser(p.id, p)).join(", ");
@@ -1338,6 +1350,14 @@ mk("song", async ({ sock, from, args }) => {
 mk("song2", async (p) => commands.get("song").run(p));
 mk("play", async (p) => commands.get("song").run(p));
 mk("video", async (p) => commands.get("ytmp4").run(p));
+mk("youtube", async (p) => commands.get("ytmp4").run(p));
+mk("yt", async (p) => commands.get("ytmp4").run(p));
+mk("audio", async (p) => commands.get("song").run(p));
+mk("download", async (p) => commands.get("ytmp4").run(p));
+mk("dl", async (p) => commands.get("ytmp4").run(p));
+mk("media", async (p) => commands.get("ytmp4").run(p));
+mk("tomp3", async (p) => commands.get("ytmp3").run(p));
+mk("ytmp", async (p) => commands.get("ytmp4").run(p));
 mk("tiktok", async ({ sock, from, args }) => {
   if (!args[0]) return;
   const { data } = await axios.get(`https://api.akuari.my.id/downloader/tiktok?link=${args[0]}`);

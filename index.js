@@ -1210,7 +1210,10 @@ async function downloadWithYtDlp(input, kind) {
   try {
     const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
     const binary = await getYtDlpBinary();
-    const clients = ["android_vr", "tv_embedded", "web_safari", "android", "web_creator"];
+    // YouTube currently serves playable formats reliably through web_safari.
+    // Older clients often return "video unavailable", which caused every
+    // song/play/video command to fall through to the failing legacy API.
+    const clients = ["web_safari", "web_creator", "android", "tv_embedded", "android_vr"];
     const cookieFile = process.env.YOUTUBE_COOKIES_FILE;
     let lastError;
     for (const client of clients) {

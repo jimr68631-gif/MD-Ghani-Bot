@@ -845,7 +845,20 @@ async function handleMessage(sock, msg, sessionId) {
           if (other.length) grouped.push(["📦 MORE COMMANDS", other]);
           const body = grouped.filter(([, list]) => list.length).map(([title, list]) => `╭─❰ *${title}* ❱\n${list.sort().map((name) => `│ ▸ ${config.prefix}${name}`).join("\n")}\n╰──────────────`).join("\n\n");
           const text = `╭━━━❰ *${config.botName}* ❱━━━╮\n┃ 🤖 Prefix: *${config.prefix}*\n┃ 📦 Commands: *${commands.size}*\n┃ 🟢 Status: *ONLINE*\n╰━━━━━━━━━━━━━━━━╯\n\n${body}\n\n> ⚡ Fast • Secure • Reliable`;
-          const parts = text.match(/[\s\S]{1,3500}/g) || [text];
+          // Split only at line boundaries; arbitrary character slicing used to
+          // cut words such as `restrict`, leaving a second message starting `rict`.
+          const parts = [];
+          let currentPart = "";
+          for (const line of text.split("\n")) {
+            const candidate = currentPart ? `${currentPart}\n${line}` : line;
+            if (currentPart && candidate.length > 3500) {
+              parts.push(currentPart);
+              currentPart = line;
+            } else {
+              currentPart = candidate;
+            }
+          }
+          if (currentPart) parts.push(currentPart);
           const contextInfo = { forwardingScore: 999, isForwarded: true, forwardedNewsletterMessageInfo: { newsletterJid: config.channelJid, newsletterName: config.botName, serverMessageId: -1 } };
           try { await targetSock.sendMessage(targetFrom, { text: parts[0], contextInfo }); }
           catch { await targetSock.sendMessage(targetFrom, { text: parts[0] }); }

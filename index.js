@@ -275,7 +275,9 @@ function messageCacheKeys(key) {
   ].filter(Boolean).map((jid) => `${jid}:${id}`))];
 }
 function cacheMessage(cache, msg) {
-  for (const cacheKey of messageCacheKeys(msg?.key)) cache.set(cacheKey, msg);
+  let snapshot = msg;
+  try { snapshot = structuredClone(msg); } catch {}
+  for (const cacheKey of messageCacheKeys(msg?.key)) cache.set(cacheKey, snapshot);
 }
 function findCachedMessage(key) {
   for (const cacheKey of messageCacheKeys(key)) {
@@ -519,8 +521,12 @@ function wireHandlers(sessionId) {
         const type = source === "status@broadcast" || source.endsWith("@newsletter") ? "STATUS" :
           oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
           oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
-          oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document" : "Media/Other";
-        const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || "";
+          oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document/File" :
+          oldMessage?.stickerMessage ? "Sticker" : oldMessage?.contactMessage ? "Contact" :
+          oldMessage?.locationMessage ? "Location" : oldMessage?.pollCreationMessage ? "Poll" : "Media/Other";
+        const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ||
+          oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption ||
+          oldMessage?.documentMessage?.caption || oldMessage?.audioMessage?.caption || "";
         const text = rawText.replace(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi, "").trim() || "[No text content in this message]";
         const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
         const report = `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮
@@ -536,13 +542,10 @@ function wireHandlers(sessionId) {
 💬 *Message Content:*
 ${text}`;
         await sock.sendMessage(botInbox, { text: report }).catch(() => {});
-        const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: +${clean(originalSender)}\n🗑️ Deleted by: +${clean(deletedBy)}`;
+        const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: ${senderName} (+${clean(originalSender)})\n🗑️ Deleted by: ${deletedByName} (+${clean(deletedBy)})`;
         try {
           const fake = { key: old.key, message: old.message };
-          if (oldMessage?.stickerMessage) {
-            const media = await downloadMedia(sock, fake);
-            await sock.sendMessage(botInbox, { sticker: media });
-          } else if (oldMessage?.imageMessage) {
+          if (oldMessage?.imageMessage) {
             const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { image: media, caption: mediaCaption });
           } else if (oldMessage?.videoMessage) {
@@ -554,8 +557,17 @@ ${text}`;
           } else if (oldMessage?.documentMessage) {
             const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { document: media, mimetype: oldMessage.documentMessage.mimetype || "application/octet-stream", fileName: oldMessage.documentMessage.fileName || "recovered-file", caption: mediaCaption });
+          } else if (oldMessage?.stickerMessage) {
+            const media = await downloadMedia(sock, fake);
+            await sock.sendMessage(botInbox, { sticker: media });
+          } else if (oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || rawText) {
+            await sock.sendMessage(botInbox, { text: `💬 *Recovered Message*\n\n${rawText}\n\n${mediaCaption}` });
+          } else if (oldMessage?.contactMessage || oldMessage?.locationMessage || oldMessage?.pollCreationMessage) {
+            await sock.sendMessage(botInbox, { text: `📦 *Recovered ${type}*\n\n${JSON.stringify(oldMessage[`${type.charAt(0).toLowerCase()}${type.slice(1)}Message`] || oldMessage, null, 2)}\n\n${mediaCaption}` });
+          } else {
+            await sock.sendMessage(botInbox, { text: `📦 *Recovered Message*\n${mediaCaption}` });
           }
-          const linkText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption || "";
+          const linkText = rawText;
           const links = linkText.match(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi);
           if (links?.length) await sock.sendMessage(botInbox, { text: `🔗 *Recovered Link(s)*\n${links.join("\n")}\n\n${mediaCaption}` });
         } catch (mediaError) {
@@ -835,11 +847,17 @@ async function handleMessage(sock, msg, sessionId) {
 }
 
 function unwrapMessage(message) {
-  return message?.ephemeralMessage?.message ||
-    message?.viewOnceMessage?.message ||
-    message?.viewOnceMessageV2?.message ||
-    message?.documentWithCaptionMessage?.message ||
-    message;
+  let current = message;
+  for (let i = 0; i < 8 && current; i++) {
+    const next = current?.ephemeralMessage?.message ||
+      current?.viewOnceMessage?.message ||
+      current?.viewOnceMessageV2?.message ||
+      current?.viewOnceMessageV2Extension?.message ||
+      current?.documentWithCaptionMessage?.message;
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
 }
 
 /* ============================================================

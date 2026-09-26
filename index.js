@@ -829,9 +829,9 @@ async function handleMessage(sock, msg, sessionId) {
         toggle: null,
         run: async ({ sock: targetSock, from: targetFrom }) => {
           const groups = [
-            ["👑 OWNER & BOT", /^(owner|mode|setprefix|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
-            ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|tagall|tag|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|opentime|closetime)/i],
-            ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
+            ["👑 OWNER & BOT", /^(owner|mode|health|setprefix|backup|restore|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
+            ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|members|admins|groupstats|pending|reject|rejectall|approve|cancelapprove|rules|setrules|clearwarnings|tagall|tag|tagme|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|open|close|opentime|closetime)/i],
+            ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antiedit|antispam|antiflood|antiraid|antiinvite|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
             ["🎵 MEDIA & DOWNLOAD", /^(play|song|song2|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
             ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
             ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
@@ -1017,8 +1017,12 @@ mk("hidetag", async ({ sock, from, args }) => {
   const md = await sock.groupMetadata(from);
   await sock.sendMessage(from, { text: args.join(" ") || " ", mentions: md.participants.map((p) => p.id) });
 });
-mk("tagme", async ({ sock, from }) => {
-  await sock.sendMessage(from, { text: `@${from.split("@")[0]}`, mentions: [from] });
+mk("tagme", async ({ sock, from, msg, sessionId }) => {
+  const sender = msg?.key?.fromMe
+    ? (sock.user?.id || sock.user?.lid || `${String(sessionId).replace(/\D/g, "")}@s.whatsapp.net`)
+    : (msg?.key?.participant || from);
+  const resolvedSender = await resolveOriginalJid(sock, sender);
+  await sock.sendMessage(from, { text: `@${resolvedSender.split("@")[0]}`, mentions: [resolvedSender] });
 });
 mk("mention", async (p) => commands.get("tagall").run(p));
 mk("open", async ({ sock, from, msg }) => {
@@ -1113,7 +1117,10 @@ mk("rejectall", async ({ sock, from, msg }) => {
 mk("admins", async ({ sock, from }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   const md = await sock.groupMetadata(from);
-  const admins = md.participants.filter((participant) => participant.admin).map((participant, index) => `${index + 1}. ${displayUser(participant.id, participant)}`);
+  const admins = await Promise.all(md.participants.filter((participant) => participant.admin).map(async (participant, index) => {
+    const jid = await resolveOriginalJid(sock, participant.phoneNumber || participant.jid || participant.id);
+    return `${index + 1}. ${displayUser(jid, participant)}`;
+  }));
   await sock.sendMessage(from, { text: `👑 *GROUP ADMINS*\n\n${admins.join("\n") || "No admins found."}` });
 });
 mk("groupstats", async ({ sock, from }) => {

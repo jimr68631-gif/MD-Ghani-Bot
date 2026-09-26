@@ -280,6 +280,29 @@ const deletedMessageCache = new Map();
 const messageRetryCache = new Map();
 const messageIdCache = new Map();
 const antideleteHandled = new Set();
+const persistentMessageCache = new Map();
+const persistentMessageCacheFile = path.resolve(config.sessionDir, ".antidelete-message-cache.json");
+let persistentWriteTimer = null;
+try {
+  if (fs.existsSync(persistentMessageCacheFile)) {
+    const saved = JSON.parse(fs.readFileSync(persistentMessageCacheFile, "utf8"));
+    for (const [id, record] of Object.entries(saved || {})) {
+      if (record?.savedAt && Date.now() - record.savedAt < 7 * 86400000) persistentMessageCache.set(id, record.message);
+    }
+  }
+} catch (error) { log.warn(`antidelete cache load failed: ${error?.message || error}`); }
+function schedulePersistentCacheWrite() {
+  if (persistentWriteTimer) return;
+  persistentWriteTimer = setTimeout(() => {
+    persistentWriteTimer = null;
+    try {
+      fs.mkdirSync(path.dirname(persistentMessageCacheFile), { recursive: true });
+      const output = {};
+      for (const [id, message] of persistentMessageCache) output[id] = { savedAt: Date.now(), message };
+      fs.writeFileSync(persistentMessageCacheFile, JSON.stringify(output));
+    } catch (error) { log.warn(`antidelete cache save failed: ${error?.message || error}`); }
+  }, 1000);
+}
 function messageCacheKeys(key) {
   const id = key?.id;
   if (!id) return [];
@@ -295,7 +318,13 @@ function cacheMessage(cache, msg) {
   try { snapshot = structuredClone(msg); } catch {}
   for (const cacheKey of messageCacheKeys(msg?.key)) cache.set(cacheKey, snapshot);
   const id = msg?.key?.id;
-  if (id) messageIdCache.set(String(id), snapshot);
+  if (id) {
+    const key = String(id);
+    messageIdCache.set(key, snapshot);
+    persistentMessageCache.set(key, snapshot);
+    while (persistentMessageCache.size > 3000) persistentMessageCache.delete(persistentMessageCache.keys().next().value);
+    schedulePersistentCacheWrite();
+  }
 }
 function findCachedRecord(key) {
   for (const cacheKey of messageCacheKeys(key)) {
@@ -306,6 +335,8 @@ function findCachedRecord(key) {
   if (id) {
     const cached = messageIdCache.get(id);
     if (cached) return cached;
+    const persisted = persistentMessageCache.get(id);
+    if (persisted) return persisted;
     for (const candidate of [...messageRetryCache.values(), ...deletedMessageCache.values()]) {
       if (String(candidate?.key?.id || candidate?.message?.key?.id || "") !== id) continue;
       const candidateJids = [candidate?.key?.remoteJid, candidate?.key?.remoteJidAlt, candidate?.message?.key?.remoteJid, candidate?.message?.key?.remoteJidAlt].filter(Boolean);

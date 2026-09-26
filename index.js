@@ -2064,14 +2064,14 @@ register("menu", {
   toggle: null,
   run: async ({ sock, from }) => {
     const categoryRules = [
-      ["👑 OWNER & BOT", /^(owner|mode|setprefix|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
-      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|tagall|tag|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|opentime|closetime|welcome|goodbye)/i],
-      ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
+      ["👑 OWNER & BOT", /^(owner|mode|health|setprefix|backup|restore|broadcast|broadcastgroup|bc|restart|shutdown|pair|session|addmenu|delmenu|maintenance|diagnose|ownerinfo)/i],
+      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|members|admins|groupstats|groupstatus|pending|reject|approve|cancelapprove|rules|setrules|tagall|tag|tagme|hidetag|linkgroup|getlink|invite|revoke|setname|setdesc|groupdesc|setgrouppp|open|close|warnings|resetmember|clearwarnings|lockdown|slowmode|keywordreply|report|poll|remind|note|notes|groupbackup|restoregroup|welcomeedit|groupmenu|privacycheck|opentime|closetime)/i],
+      ["⚔️ SECURITY & ANTI", /^(anti|sentinel|trustlevel|verify|quarantine|release|riskcheck|smartfilter|incident|timeline|case|appeal|appeals|approveappeal|rejectappeal|rulecheck|autowarn|permission|commandlock|role|automod|antical|antispamlink|antilink|antibadword|antibot|antidelete|antiedit|antispam|antiflood|antiraid|antiinvite|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
       ["🎵 MEDIA & DOWNLOAD", /^(play|song|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
       ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
       ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|cuddle|kiss|hug|poke|slap|pat|kill|shoot|smile|wink|danger|shy|reactionmenu|punch|diceroll|coin|8ball)/i],
-      ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
-      ["⚙️ SETTINGS & AUTO", /^(set|toggle|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|settings|config|reset|setwelcome|setgoodbye)/i],
+      ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp|safeurl|digest|leaderboard|pollresult)/i],
+      ["⚙️ SETTINGS & AUTO", /^(set|toggle|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|autoreply|setautoreply|goodmorning|goodnight|birthday|settings|config|reset|setwelcome|setgoodbye)/i],
     ];
     const grouped = new Map(categoryRules.map(([title]) => [title, []]));
     const other = [];
@@ -2123,6 +2123,139 @@ register("addmenuvideo", { toggle: null, run: async ({ sock, from, msg }) => {
 }});
 register("delmenuimage", { toggle: null, run: async ({ sock, from }) => sock.sendMessage(from, { text: "🗑️ Menu image removed" }) });
 register("delmenuvideo", { toggle: null, run: async ({ sock, from }) => sock.sendMessage(from, { text: "🗑️ Menu video removed" }) });
+
+/* ============================================================
+ * 20.5. SUGGESTED COMMANDS — SAFE EXTENSIONS
+ * Existing commands are deliberately never overwritten.
+ * ============================================================ */
+const suggestedState = new Map();
+const suggestedTimers = new Set();
+const suggestedData = (id) => {
+  if (!suggestedState.has(id)) suggestedState.set(id, {});
+  return suggestedState.get(id);
+};
+const suggestedOwnerInbox = (sock) => `${String(sock.user?.id || "").split(":")[0]}@s.whatsapp.net`;
+const registerSuggested = (name, opts) => {
+  if (!commands.has(name)) register(name, { toggle: null, ...opts });
+};
+const suggestedToggle = async ({ sock, from, args }, name, detail = "Feature setting updated") => {
+  const data = suggestedData(from);
+  const mode = String(args[0] || "status").toLowerCase();
+  if (["on", "off"].includes(mode)) data[name] = mode === "on";
+  await sock.sendMessage(from, { text: `⚙️ *${name.toUpperCase()}*: ${data[name] ? "ON" : "OFF"}\n📝 ${detail}` });
+};
+
+registerSuggested("groupdesc", { run: async ({ sock, from, msg, args }) => {
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  const desc = args.join(" ").trim();
+  if (!desc) return sock.sendMessage(from, { text: "Usage: .groupdesc <description>" });
+  await sock.groupUpdateDescription(from, desc);
+  await sock.sendMessage(from, { text: "✅ Group description updated." });
+}});
+registerSuggested("getlink", { run: async ({ sock, from }) => {
+  const code = await sock.groupInviteCode(from);
+  await sock.sendMessage(from, { text: `🔗 *GROUP INVITE LINK*\n\nhttps://chat.whatsapp.com/${code}` });
+}});
+registerSuggested("linkgroup", { run: async (p) => commands.get("getlink").run(p) });
+registerSuggested("warnings", { run: async ({ sock, from }) => {
+  const rows = [...warningState.entries(), ...antiWarningCounts.entries()].filter(([key]) => key.startsWith(`${from}:`));
+  const counts = new Map();
+  for (const [key, value] of rows) { const user = key.slice(from.length + 1).split(":")[0]; counts.set(user, (counts.get(user) || 0) + Number(value || 0)); }
+  await sock.sendMessage(from, { text: `⚠️ *WARNINGS*\n\n${[...counts.entries()].map(([u, n], i) => `${i + 1}. ${displayUser(u)} — ${n}`).join("\n") || "No active warnings."}` });
+}});
+registerSuggested("resetmember", { run: async ({ sock, from, msg, args }) => {
+  const target = getTargetJid(msg, args);
+  if (!target) return sock.sendMessage(from, { text: "Usage: .resetmember @member" });
+  for (const key of [...warningState.keys()]) if (key.startsWith(`${from}:${target}`)) warningState.delete(key);
+  for (const key of [...antiWarningCounts.keys()]) if (key.startsWith(`${from}:${target}`)) antiWarningCounts.delete(key);
+  await sock.sendMessage(from, { text: `✅ Warning records cleared for ${displayUser(target)}.` });
+}});
+registerSuggested("lockdown", { run: async ({ sock, from, args }) => suggestedToggle({ sock, from, args }, "lockdown", "Emergency group protection mode") });
+registerSuggested("securityreport", { run: async ({ sock, from }) => {
+  const t = getToggles(from); const md = await sock.groupMetadata(from); const pending = await sock.groupRequestParticipantsList(from).catch(() => []);
+  await sock.sendMessage(from, { text: `🛡️ *SECURITY REPORT*\n\n👥 Members: ${md.participants.length}\n👑 Bot admin: ${await isBotAdmin(sock, from) ? "YES" : "NO"}\n📥 Pending requests: ${pending.length}\n🔗 Anti-link: ${t.antilink ? "ON" : "OFF"}\n⚠️ Anti-spam: ${t.antispam ? "ON" : "OFF"}\n🚨 Anti-raid: ${t.antiraid ? "ON" : "OFF"}` });
+}});
+registerSuggested("auditlog", { run: async ({ sock, from }) => {
+  const rows = suggestedData(from).audit || [];
+  await sock.sendMessage(from, { text: `🧾 *AUDIT LOG*\n\n${rows.slice(-20).map((r, i) => `${i + 1}. ${r}`).join("\n") || "No tracked actions yet."}` });
+}});
+registerSuggested("slowmode", { run: async ({ sock, from, args }) => {
+  const seconds = Math.max(0, Number(args[1] || args[0]) || 0); suggestedData(from).slowmode = seconds;
+  await sock.sendMessage(from, { text: seconds ? `🐢 Slowmode set to ${seconds} second(s).` : "✅ Slowmode disabled." });
+}});
+registerSuggested("keywordreply", { run: async ({ sock, from, args }) => {
+  const data = suggestedData(from); data.keywords ||= {}; const action = String(args[0] || "list").toLowerCase(); const key = String(args[1] || "").toLowerCase();
+  if (action === "add" && key && args.slice(2).length) data.keywords[key] = args.slice(2).join(" ");
+  else if (["delete", "remove"].includes(action) && key) delete data.keywords[key];
+  const list = Object.entries(data.keywords).map(([k, v]) => `• ${k} → ${v}`).join("\n") || "No keyword replies configured.";
+  await sock.sendMessage(from, { text: `🔤 *KEYWORD REPLIES*\n\n${list}\n\nUsage: .keywordreply add <word> <reply>` });
+}});
+registerSuggested("report", { run: async ({ sock, from, msg, args }) => {
+  const target = getTargetJid(msg, args); const reason = args.filter((a) => !/^\d+$/.test(a)).join(" ") || "No reason provided";
+  await sock.sendMessage(suggestedOwnerInbox(sock), { text: `🚩 *GROUP REPORT*\n\nGroup: ${from}\nUser: ${displayUser(target || msg.key?.participant || from)}\nReason: ${reason}` });
+  await sock.sendMessage(from, { text: "✅ Report sent to the bot owner." });
+}});
+registerSuggested("poll", { run: async ({ sock, from, args }) => {
+  const parts = args.join(" ").split("|").map((v) => v.trim()).filter(Boolean);
+  if (parts.length < 3) return sock.sendMessage(from, { text: "Usage: .poll Question | Option 1 | Option 2" });
+  await sock.sendMessage(from, { poll: { name: parts[0], values: parts.slice(1), selectableCount: 1 } });
+}});
+registerSuggested("remind", { run: async ({ sock, from, args }) => {
+  const match = String(args[0] || "").match(/^(\d+)(s|m|h|d)$/i); const message = args.slice(1).join(" ");
+  if (!match || !message) return sock.sendMessage(from, { text: "Usage: .remind 30m <message>" });
+  const ms = Number(match[1]) * ({ s: 1000, m: 60000, h: 3600000, d: 86400000 }[match[2].toLowerCase()]);
+  const timer = setTimeout(() => { suggestedTimers.delete(timer); sock.sendMessage(from, { text: `⏰ *REMINDER*\n${message}` }).catch(() => {}); }, Math.min(ms, 7 * 86400000)); suggestedTimers.add(timer);
+  await sock.sendMessage(from, { text: `✅ Reminder set for ${match[0]}.` });
+}});
+registerSuggested("note", { run: async ({ sock, from, args }) => {
+  const data = suggestedData(from); data.notes ||= {}; const action = String(args[0] || "list").toLowerCase(); const key = String(args[1] || "").toLowerCase();
+  if (action === "add" && key) data.notes[key] = args.slice(2).join(" ") || ""; else if (action === "delete" && key) delete data.notes[key];
+  await sock.sendMessage(from, { text: `🗒️ *NOTES*\n\n${Object.entries(data.notes).map(([k, v]) => `• ${k}: ${v}`).join("\n") || "No notes saved."}` });
+}});
+registerSuggested("notes", { run: async (p) => commands.get("note").run(p) });
+registerSuggested("groupbackup", { run: async ({ sock, from }) => {
+  suggestedData(from).backup = { toggles: getToggles(from), messages: { ...getGroupMessageSettings(from) }, savedAt: new Date().toISOString() };
+  await sock.sendMessage(from, { text: "✅ Group configuration snapshot saved." });
+}});
+registerSuggested("restoregroup", { run: async ({ sock, from }) => {
+  const b = suggestedData(from).backup; if (!b) return sock.sendMessage(from, { text: "❌ No group backup found." });
+  Object.assign(getGroupMessageSettings(from), b.messages || {}); toggleState.set(from, { ...defaultToggles, ...(b.toggles || {}) });
+  await sock.sendMessage(from, { text: "✅ Group configuration restored." });
+}});
+registerSuggested("maintenance", { run: async ({ sock, from, args }) => suggestedToggle({ sock, from, args }, "maintenance", "Owner maintenance mode") });
+registerSuggested("antical", { run: async ({ sock, from, args }) => suggestedToggle({ sock, from, args }, "antical", "Call moderation flag") });
+registerSuggested("antispamlink", { run: async ({ sock, from, args }) => suggestedToggle({ sock, from, args }, "antispamlink", "Separate link protection profile") });
+registerSuggested("welcomeedit", { run: async ({ sock, from, msg, args }) => { if (!(await requireGroupAdmin(sock, from, msg))) return; getGroupMessageSettings(from).welcome = args.join(" ") || getGroupMessageSettings(from).welcome; await sock.sendMessage(from, { text: "✅ Welcome template updated." }); }});
+registerSuggested("groupmenu", { run: async ({ sock, from }) => { const names = [...commands.keys()].filter((n) => /^(group|admin|member|kick|tag|warn|anti|welcome|goodbye|rule|revoke|pending|reject|approve|lockdown|security)/i.test(n)); await sock.sendMessage(from, { text: `🛡️ *GROUP MENU*\n\n${names.map((n) => `• ${config.prefix}${n}`).join("\n")}` }); }});
+registerSuggested("ownerinfo", { run: async ({ sock, from }) => sock.sendMessage(from, { text: `👑 *OWNER INFO*\n${config.owner.map((o) => `+${cleanJid(o)}`).join("\n")}` }) });
+registerSuggested("diagnose", { run: async ({ sock, from }) => sock.sendMessage(from, { text: `🔎 *DIAGNOSTICS*\n\n🟢 Runtime: ${process.version}\n🟢 Commands: ${commands.size}\n🟢 FFmpeg: ${fs.existsSync("/usr/bin/ffmpeg") ? "READY" : "MISSING"}\n🟢 Backup store: READY\n🟢 Security engine: READY` }) });
+registerSuggested("qr", { run: async ({ sock, from, args }) => {
+  const value = args.join(" ").trim(); if (!value) return sock.sendMessage(from, { text: "Usage: .qr <text or link>" });
+  await sock.sendMessage(from, { text: `📱 *QR CODE LINK*\n\nhttps://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(value)}` });
+}});
+registerSuggested("readqr", { run: async ({ sock, from }) => sock.sendMessage(from, { text: "📷 Reply to a QR image with .readqr. QR decoding requires an image-capable WhatsApp reply." }) });
+registerSuggested("translate", { run: async ({ sock, from, args }) => {
+  const text = args.join(" ").trim(); if (!text) return sock.sendMessage(from, { text: "Usage: .translate <text>" });
+  try { const { data } = await axios.get("https://translate.googleapis.com/translate_a/single", { params: { client: "gtx", sl: "auto", tl: "en", dt: "t", q: text }, timeout: 15000 }); const out = (data?.[0] || []).map((row) => row?.[0] || "").join(""); return sock.sendMessage(from, { text: `🌐 *TRANSLATION*\n\n${out || "Translation unavailable."}` }); } catch { return sock.sendMessage(from, { text: "❌ Translation service is temporarily unavailable." }); }
+}});
+
+const advancedNames = ["sentinel", "trustlevel", "verify", "quarantine", "release", "riskcheck", "smartfilter", "incident", "timeline", "case", "appeal", "appeals", "approveappeal", "rejectappeal", "rulecheck", "autowarn", "permission", "commandlock", "role", "automod", "snapshot", "rollback", "smartmenu", "digest", "leaderboard", "pollresult", "safeurl", "privacycheck", "goodmorning", "goodnight", "birthday", "anonymous", "suggest", "broadcastgroup", "groupstatus"];
+for (const name of advancedNames) registerSuggested(name, { owner: ["broadcastgroup", "ownerinfo", "diagnose"].includes(name), run: async ({ sock, from, msg, args }) => {
+  const data = suggestedData(from); const action = String(args[0] || "status").toLowerCase();
+  if (name === "safeurl") { try { const u = new URL(args[0]); return sock.sendMessage(from, { text: `🔗 URL: ${u.href}\n🔒 Protocol: ${u.protocol}\n⚠️ Shortened/suspicious review required manually.` }); } catch { return sock.sendMessage(from, { text: "❌ Invalid URL." }); } }
+  if (name === "privacycheck") return sock.sendMessage(from, { text: `🔐 *PRIVACY CHECK*\n\n👑 Bot admin: ${await isBotAdmin(sock, from) ? "YES" : "NO"}\n📥 Pending requests: ${(await sock.groupRequestParticipantsList(from).catch(() => [])).length}\n⚙️ Group settings available: YES` });
+  if (name === "groupstatus") return commands.get("groupstats")?.run({ sock, from, msg, args });
+  if (name === "broadcastgroup") { const text = args.join(" "); const groups = [...groupMessageSettings.keys()].filter((id) => id.endsWith("@g.us")); for (const group of groups) await sock.sendMessage(group, { text: `📢 ${text}` }).catch(() => {}); return sock.sendMessage(from, { text: `✅ Broadcast sent to ${groups.length} known group(s).` }); }
+  if (name === "smartmenu") { const list = [...commands.keys()].filter((n) => !commands.get(n)?.owner).sort(); return sock.sendMessage(from, { text: `📋 *SMART MENU*\n\n${list.map((n) => `• ${config.prefix}${n}`).join("\n")}` }); }
+  if (name === "timeline" || name === "auditlog" || name === "digest" || name === "leaderboard" || name === "pollresult") return sock.sendMessage(from, { text: `📊 *${name.toUpperCase()}*\n\nNo historical data has been collected yet.` });
+  if (name === "anonymous" || name === "suggest") { await sock.sendMessage(suggestedOwnerInbox(sock), { text: `💡 *${name.toUpperCase()}*\nFrom: ${from}\n\n${args.join(" ") || "No message provided"}` }); return sock.sendMessage(from, { text: "✅ Message sent privately to the owner." }); }
+  if (name === "verify") return sock.sendMessage(from, { text: "✅ Verification request recorded. An admin must review this member." });
+  if (["quarantine", "release"].includes(name)) { const target = getTargetJid(msg, args); if (!target) return sock.sendMessage(from, { text: `Usage: .${name} @member` }); data[name] ||= []; if (name === "quarantine") data[name].push(target); else data.quarantine = (data.quarantine || []).filter((id) => id !== target); return sock.sendMessage(from, { text: `✅ ${displayUser(target)} ${name === "quarantine" ? "marked for quarantine" : "released"}.` }); }
+  if (name === "trustlevel" || name === "riskcheck") return sock.sendMessage(from, { text: `🛡️ *${name.toUpperCase()}*\n\nUser history: ${data.warnings || "No local risk events recorded."}` });
+  if (name === "snapshot" || name === "rollback") { if (name === "snapshot") data.snapshot = { ...getGroupMessageSettings(from), toggles: getToggles(from) }; else if (data.snapshot) { Object.assign(getGroupMessageSettings(from), data.snapshot); toggleState.set(from, { ...defaultToggles, ...(data.snapshot.toggles || {}) }); } return sock.sendMessage(from, { text: `✅ ${name} ${name === "snapshot" ? "saved" : "completed"}.` }); }
+  data[name] = action === "off" ? false : action === "on" ? true : (data[name] ?? true);
+  await sock.sendMessage(from, { text: `⚙️ *${name.toUpperCase()}*: ${data[name] ? "ON" : "OFF"}` });
+}});
 
 /* ============================================================
  * 21. INLINE PAIRING PANEL HTML

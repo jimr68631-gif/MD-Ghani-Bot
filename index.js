@@ -43,6 +43,21 @@ async function downloadMedia(sock, message) {
   for await (const chunk of stream) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
+function getQuotedMessage(message) {
+  const content = unwrapMessage(message?.message || message);
+  const context = content?.extendedTextMessage?.contextInfo ||
+    content?.imageMessage?.contextInfo || content?.videoMessage?.contextInfo ||
+    content?.documentMessage?.contextInfo || {};
+  return context.quotedMessage ? unwrapMessage(context.quotedMessage) : null;
+}
+function cleanJid(jid) {
+  return String(jid || "").split(":")[0].split("@")[0].replace(/\D/g, "");
+}
+function displayUser(jid, participant = null) {
+  const number = cleanJid(jid);
+  const name = participant?.name || participant?.notify || participant?.verifiedName;
+  return name && number ? `${name} (+${number})` : name || (number ? `+${number}` : "Unknown user");
+}
 
 /* ============================================================
  *  0. DOCKERFILE / ENV SELF-CHECK
@@ -148,9 +163,9 @@ const toggleState = new Map();
 const groupMessageSettings = new Map();
 const antiWarningCounts = new Map();
 const antiWarningStyles = [
-  (user, key) => `⚠️ *WARNING (1/3)*\n@${user} — *${key}* is not allowed in this group.\nPlease do not repeat it.`,
-  (user, key) => `╭━━━❰ ⚠️ WARNING 2/3 ❱━━━╮\n┃ @${user}\n┃ *${key}* is not allowed here.\n┃ Next violation will remove you.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
-  (user, key) => `🚨 *FINAL WARNING (3/3)* 🚨\n@${user} — *${key}* is still not allowed in this group.\n🚫 You are being removed now.`,
+  (user, key) => `⚠️ *WARNING (1/3)*\n👤 ${user} — *${key}* is not allowed in this group.\nPlease do not repeat it.`,
+  (user, key) => `╭━━━❰ ⚠️ WARNING 2/3 ❱━━━╮\n┃ 👤 ${user}\n┃ *${key}* is not allowed here.\n┃ Next violation will remove you.\n╰━━━━━━━━━━━━━━━━━━━━╯`,
+  (user, key) => `🚨 *FINAL WARNING (3/3)* 🚨\n👤 ${user} — *${key}* is still not allowed in this group.\n🚫 You are being removed now.`,
 ];
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag", "movie",
@@ -318,6 +333,10 @@ async function startSession(sessionId, phoneNumber) {
 
   sessions.set(sessionId, { sock, info: { phoneNumber }, wired: false, starting: false, reconnectTimer: null });
   sock.ev.on("creds.update", saveCreds);
+  // Register handlers immediately instead of waiting for the first open event.
+  // This removes the post-connection window where WhatsApp is connected but
+  // incoming commands are not yet being processed.
+  wireHandlers(sessionId);
 
   let pairingRequested = false;
   let pairingResolve;
@@ -343,7 +362,6 @@ async function startSession(sessionId, phoneNumber) {
     }
     if (connection === "open") {
       log.info(`🟢 ${sessionId} connected`);
-      wireHandlers(sessionId);
       const connectedJid = `${String(sessionId).replace(/\D/g, "")}@s.whatsapp.net`;
       if (connectedJid) {
         sock.sendMessage(connectedJid, {
@@ -547,7 +565,7 @@ async function runAuto(sock, msg, sessionId, toggles) {
       const statusMessage = unwrapMessage(msg.message);
       const statusText = statusMessage?.conversation || statusMessage?.extendedTextMessage?.text || statusMessage?.imageMessage?.caption || statusMessage?.videoMessage?.caption || "[Status media]";
       const inbox = sock.user?.id?.split(":")[0] + "@s.whatsapp.net";
-      sock.sendMessage(inbox, { text: `💾 *Status Saved*\n👤 From: ${msg.key.participant || "Unknown"}\n\n${statusText}` }).catch(() => {});
+      sock.sendMessage(inbox, { text: `💾 *Status Saved*\n👤 From: ${displayUser(msg.key.participant)}\n\n${statusText}` }).catch(() => {});
     }
     if (toggles.autoviewstatus) sock.readMessages([msg.key]).catch(() => {});
     if (toggles.autoreactstatus && msg.key.participant) {
@@ -613,7 +631,7 @@ async function takeAction(sock, group, user, msg, key) {
     antiWarningCounts.set(warningKey, warningNumber);
     await sock.sendMessage(group, { delete: msg.key }).catch(() => {});
     const shouldRemove = warningNumber >= 3;
-    const warningText = antiWarningStyles[warningNumber - 1](user.split("@")[0], key.toUpperCase());
+    const warningText = antiWarningStyles[warningNumber - 1](displayUser(user), key.toUpperCase());
     await sock.sendMessage(group, {
       text: warningText,
       mentions: [user],
@@ -892,10 +910,9 @@ mk("close", async ({ sock, from, msg }) => {
 });
 mk("groupinfo", async ({ sock, from }) => {
   const md = await sock.groupMetadata(from);
-  const admins = md.participants.filter((p) => p.admin).map((p) => `@${p.id.split("@")[0]}`).join(", ");
+  const admins = md.participants.filter((p) => p.admin).map((p) => displayUser(p.id, p)).join(", ");
   await sock.sendMessage(from, {
     text: `📛 *${md.subject}*\n🆔 ${md.id}\n👥 Members: ${md.participants.length}\n👑 Admins: ${admins || "None"}\n📝 ${md.desc?.toString() || "No description"}`,
-    mentions: md.participants.map((p) => p.id),
   });
 });
 mk("totalmembers", async ({ sock, from }) => {
@@ -916,8 +933,11 @@ mk("delgrouppp", async ({ sock, from }) => {
   await sock.sendMessage(from, { text: "🗑️ Group PP deleted" });
 });
 mk("setgrouppp", async ({ sock, from, msg }) => {
-  if (!msg.message?.imageMessage) return sock.sendMessage(from, { text: "❌ Reply to an image with .setgrouppp" });
-  const buf = await downloadMedia(sock, msg);
+  const direct = unwrapMessage(msg.message);
+  const quoted = getQuotedMessage(msg);
+  const mediaMessage = direct?.imageMessage ? msg : quoted?.imageMessage ? { message: quoted } : null;
+  if (!mediaMessage) return sock.sendMessage(from, { text: "❌ Please reply to an image with .setgrouppp, or send the image with the command." });
+  const buf = await downloadMedia(sock, mediaMessage);
   await sock.updateProfilePicture(from, buf);
   await sock.sendMessage(from, { text: "✅ Group PP updated" });
 });
@@ -1616,7 +1636,12 @@ register("getdp", { toggle: null, run: async ({ sock, from, msg, args }) => {
 register("dp", { toggle: null, run: async (p) => commands.get("getdp").run(p) });
 register("getid", { toggle: null, run: async ({ sock, from, msg }) => {
   const t = msg.message?.extendedTextMessage?.contextInfo?.participant || from;
-  await sock.sendMessage(from, { text: `🆔 ${t}` });
+  let participant;
+  if (from.endsWith("@g.us")) {
+    const md = await sock.groupMetadata(from);
+    participant = md.participants.find((p) => p.id === t || p.jid === t || cleanJid(p.id) === cleanJid(t));
+  }
+  await sock.sendMessage(from, { text: `👤 User: ${displayUser(t, participant)}\n🆔 WhatsApp ID: ${t}` });
 }});
 register("profile", { toggle: null, run: async ({ sock, from, msg, args }) => {
   const t = await resolveOriginalJid(sock, getTargetJid(msg, args, msg?.key?.participant || from));

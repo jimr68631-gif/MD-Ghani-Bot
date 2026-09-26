@@ -43,6 +43,60 @@ async function downloadMedia(sock, message) {
   for await (const chunk of stream) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
+function getMediaInput(msg) {
+  const direct = unwrapMessage(msg?.message);
+  const directEntry = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"]
+    .find((key) => direct?.[key]);
+  if (directEntry) return { message: msg, content: direct, kind: directEntry };
+  const quoted = getQuotedMessage(msg);
+  const quotedEntry = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"]
+    .find((key) => quoted?.[key]);
+  if (!quotedEntry) return null;
+  return {
+    message: { key: { remoteJid: msg?.key?.remoteJid, id: msg?.key?.id || `quoted-${Date.now()}` }, message: quoted },
+    content: quoted,
+    kind: quotedEntry,
+  };
+}
+async function convertVideoToSticker(buf) {
+  const id = `md-ghani-sticker-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const input = path.join(os.tmpdir(), `${id}.input`);
+  const output = path.join(os.tmpdir(), `${id}.webp`);
+  try {
+    await fs.promises.writeFile(input, buf);
+    await execFileAsync("ffmpeg", ["-y", "-i", input, "-t", "6", "-vf", "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:-1:-1:color=black@0,fps=15", "-an", "-c:v", "libwebp", "-q:v", "55", "-loop", "0", output], { timeout: 30000, maxBuffer: 1024 * 1024 });
+    return await fs.promises.readFile(output);
+  } finally {
+    await Promise.all([fs.promises.rm(input, { force: true }), fs.promises.rm(output, { force: true })]);
+  }
+}
+async function extractVideoFrame(buf) {
+  const id = `md-ghani-frame-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const input = path.join(os.tmpdir(), `${id}.input`);
+  const output = path.join(os.tmpdir(), `${id}.jpg`);
+  try {
+    await fs.promises.writeFile(input, buf);
+    await execFileAsync("ffmpeg", ["-y", "-ss", "0", "-i", input, "-frames:v", "1", "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease", "-q:v", "4", output], { timeout: 20000, maxBuffer: 1024 * 1024 });
+    return await fs.promises.readFile(output);
+  } finally {
+    await Promise.all([fs.promises.rm(input, { force: true }), fs.promises.rm(output, { force: true })]);
+  }
+}
+async function convertToGifVideo(buf, kind) {
+  const id = `md-ghani-gif-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const input = path.join(os.tmpdir(), `${id}.${kind === "imageMessage" ? "png" : "mp4"}`);
+  const output = path.join(os.tmpdir(), `${id}.mp4`);
+  try {
+    await fs.promises.writeFile(input, buf);
+    const source = kind === "imageMessage"
+      ? ["-loop", "1", "-i", input, "-t", "3"]
+      : ["-i", input, "-t", "6"];
+    await execFileAsync("ffmpeg", ["-y", ...source, "-vf", "scale=720:720:force_original_aspect_ratio=decrease,pad=720:720:-1:-1:color=black", "-r", "15", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output], { timeout: 30000, maxBuffer: 1024 * 1024 });
+    return await fs.promises.readFile(output);
+  } finally {
+    await Promise.all([fs.promises.rm(input, { force: true }), fs.promises.rm(output, { force: true })]);
+  }
+}
 function getQuotedMessage(message) {
   const content = unwrapMessage(message?.message || message);
   const context = content?.extendedTextMessage?.contextInfo ||
@@ -451,6 +505,7 @@ async function startSession(sessionId, phoneNumber) {
     }
     if (connection === "open") {
       log.info(`🟢 ${sessionId} connected`);
+      sock.sendPresenceUpdate(getToggles(sessionId).alwaysonline ? "available" : "unavailable").catch(() => {});
       const connectedJid = `${String(sessionId).replace(/\D/g, "")}@s.whatsapp.net`;
       if (connectedJid) {
         sock.sendMessage(connectedJid, {
@@ -692,35 +747,37 @@ function wireHandlers(sessionId) {
 async function runAuto(sock, msg, sessionId, toggles) {
   const from = msg.key?.remoteJid;
   if (!from) return;
-  if (from.endsWith("@g.us") && !(await isBotAdmin(sock, from))) return;
-  toggles = from.endsWith("@g.us") ? getToggles(from) : getToggles(sessionId);
+  const statusMessage = from === "status@broadcast";
+  toggles = statusMessage || !from.endsWith("@g.us") ? getToggles(sessionId) : getToggles(from);
   const autoMessage = unwrapMessage(msg.message);
   const autoText = autoMessage?.conversation || autoMessage?.extendedTextMessage?.text || "";
-  if (toggles.autoreply && !msg.key.fromMe && autoText && !autoText.startsWith(config.prefix)) {
+  if (toggles.autoreply && !msg.key?.fromMe && autoText && !autoText.startsWith(config.prefix)) {
     const reply = from.endsWith("@g.us") ? getGroupMessageSettings(from).autoreply : "Thanks for your message.";
     sock.sendMessage(from, { text: `🤖 ${reply}` }).catch(() => {});
   }
   if (toggles.autoseen) sock.readMessages([msg.key]).catch(() => {});
-  if (toggles.autotyping && !msg.key.fromMe) {
+  if (toggles.autotyping && !msg.key?.fromMe) {
     sock.sendPresenceUpdate("composing", from).catch(() => {});
     setTimeout(() => sock.sendPresenceUpdate("paused", from).catch(() => {}), 1500);
   }
-  if (toggles.autorecording && !msg.key.fromMe) {
+  if (toggles.autorecording && !msg.key?.fromMe) {
     sock.sendPresenceUpdate("recording", from).catch(() => {});
     setTimeout(() => sock.sendPresenceUpdate("paused", from).catch(() => {}), 1500);
   }
-  if (toggles.autoreact && !msg.key.fromMe) {
+  if (toggles.autoreact && !msg.key?.fromMe) {
     const emojis = ["❤️", "🔥", "👍", "😍", "💯", "⚡", "✨", "🎯"];
     const e = emojis[Math.floor(Math.random() * emojis.length)];
     sock.sendMessage(from, { react: { text: e, key: msg.key } }).catch(() => {});
   }
-  if (toggles.autoreacttyping && !msg.key.fromMe) {
+  if (toggles.autoreacttyping && !msg.key?.fromMe) {
     sock.sendPresenceUpdate("composing", from).catch(() => {});
+    setTimeout(() => sock.sendPresenceUpdate("paused", from).catch(() => {}), 1500);
   }
-  if (toggles.autorecordtyping && !msg.key.fromMe) {
+  if (toggles.autorecordtyping && !msg.key?.fromMe) {
     sock.sendPresenceUpdate("recording", from).catch(() => {});
+    setTimeout(() => sock.sendPresenceUpdate("paused", from).catch(() => {}), 1500);
   }
-  if (from === "status@broadcast") {
+  if (statusMessage) {
     if (toggles.autosavestatus) {
       const statusMessage = unwrapMessage(msg.message);
       const statusText = statusMessage?.conversation || statusMessage?.extendedTextMessage?.text || statusMessage?.imageMessage?.caption || statusMessage?.videoMessage?.caption || "[Status media]";
@@ -1288,8 +1345,9 @@ for (const name of AUTO_LIST) {
   register(name, {
     toggle: null,
     run: async ({ sock, from, msg, args }) => {
-      if (!(await requireGroupAdmin(sock, from, msg))) return;
-      const scope = from.endsWith("@g.us") ? from : from;
+      if (!(await requireGroupAdmin(sock, from, msg, false))) return;
+      const sessionScoped = ["autoviewstatus", "autoreactstatus", "autosavestatus"].includes(name);
+      const scope = sessionScoped ? (sock.user?.id?.split(":")[0] || from) : from;
       if (!args[0]) return sock.sendMessage(from, { text: `${styledToggleReply(name, getToggles(scope)[name], `Usage: .${name} on/off`)}` });
       setToggle(scope, name, args[0]);
       await sock.sendMessage(from, { text: styledToggleReply(name, getToggles(scope)[name], "Updated for this group") });
@@ -1666,20 +1724,29 @@ mk("instagram", async ({ sock, from, args }) => {
  * 14. COMMANDS — MEDIA
  * ============================================================ */
 mk("sticker", async ({ sock, from, msg }) => {
-  const media = msg.message?.imageMessage || msg.message?.videoMessage;
-  if (!media) return;
-  const buf = await downloadMedia(sock, msg);
-  const webp = await sharp(buf).webp().toBuffer();
+  const input = getMediaInput(msg);
+  if (!input || !["imageMessage", "videoMessage"].includes(input.kind)) {
+    return sock.sendMessage(from, { text: "❌ Send or reply to an image/video with .sticker" });
+  }
+  const buf = await downloadMedia(sock, input.message);
+  const webp = input.kind === "videoMessage"
+    ? await convertVideoToSticker(buf)
+    : await sharp(buf).rotate().resize(512, 512, { fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
   await sock.sendMessage(from, { sticker: webp });
 });
 mk("tosticker", async (p) => commands.get("sticker").run(p));
 mk("togif", async ({ sock, from, msg }) => {
-  const buf = await downloadMedia(sock, msg);
-  await sock.sendMessage(from, { video: buf, gifPlayback: true });
+  const input = getMediaInput(msg);
+  if (!input || !["imageMessage", "videoMessage"].includes(input.kind)) return sock.sendMessage(from, { text: "❌ Send or reply to an image/video with .togif" });
+  const buf = await downloadMedia(sock, input.message);
+  const gifVideo = await convertToGifVideo(buf, input.kind);
+  await sock.sendMessage(from, { video: gifVideo, gifPlayback: true });
 });
 mk("toimg", async ({ sock, from, msg }) => {
-  const buf = await downloadMedia(sock, msg);
-  const png = await sharp(buf).png().toBuffer();
+  const input = getMediaInput(msg);
+  if (!input || !["imageMessage", "videoMessage"].includes(input.kind)) return sock.sendMessage(from, { text: "❌ Send or reply to an image/video with .toimg" });
+  const buf = await downloadMedia(sock, input.message);
+  const png = input.kind === "videoMessage" ? await extractVideoFrame(buf) : await sharp(buf).rotate().png().toBuffer();
   await sock.sendMessage(from, { image: png });
 });
 mk("sticker2img", async (p) => commands.get("toimg").run(p));
@@ -1732,13 +1799,17 @@ mk("vv", async ({ sock, from, msg, sessionId }) => {
   return sent;
 });
 mk("blur", async ({ sock, from, msg }) => {
-  const buf = await downloadMedia(sock, msg);
-  const blurred = await sharp(buf).blur(15).toBuffer();
+  const input = getMediaInput(msg);
+  if (!input || input.kind !== "imageMessage") return sock.sendMessage(from, { text: "❌ Send or reply to an image with .blur" });
+  const buf = await downloadMedia(sock, input.message);
+  const blurred = await sharp(buf).rotate().blur(15).jpeg({ quality: 82 }).toBuffer();
   await sock.sendMessage(from, { image: blurred });
 });
 mk("crop", async ({ sock, from, msg }) => {
-  const buf = await downloadMedia(sock, msg);
-  const cropped = await sharp(buf).resize(500, 500, { fit: "cover" }).toBuffer();
+  const input = getMediaInput(msg);
+  if (!input || input.kind !== "imageMessage") return sock.sendMessage(from, { text: "❌ Send or reply to an image with .crop" });
+  const buf = await downloadMedia(sock, input.message);
+  const cropped = await sharp(buf).rotate().resize(500, 500, { fit: "cover" }).jpeg({ quality: 82 }).toBuffer();
   await sock.sendMessage(from, { image: cropped });
 });
 mk("setfont", async ({ sock, from, args }) => {
@@ -1982,6 +2053,7 @@ mkOwner("save", async ({ sock, from }) => sock.sendMessage(from, { text: "💾 S
 mkOwner("owner", async ({ sock, from }) => sock.sendMessage(from, { text: `👑 Owner: ${config.owner.map((o) => "+" + o.split("@")[0]).join(", ")}` }));
 mkOwner("alwaysonline", async ({ sock, from, args, sessionId }) => {
   if (args[0]) setToggle(sessionId, "alwaysonline", args[0]);
+  await sock.sendPresenceUpdate(getToggles(sessionId).alwaysonline ? "available" : "unavailable").catch(() => {});
   await sock.sendMessage(from, { text: styledToggleReply("alwaysonline", getToggles(sessionId).alwaysonline, "Updated") });
 });
 mkOwner("warn", async ({ sock, from, msg }) => {

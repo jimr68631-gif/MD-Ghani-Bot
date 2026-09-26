@@ -261,6 +261,7 @@ const commands = new Map();
 const register = (name, opts) => commands.set(String(name).trim().toLowerCase(), opts);
 const sessions = new Map();
 let shuttingDown = false;
+const approvalJobs = new Map();
 const deletedMessageCache = new Map();
 // Keep recent full messages available for Baileys retry/decryption requests.
 const messageRetryCache = new Map();
@@ -984,6 +985,42 @@ mk("listblocked", async ({ sock, from }) => {
 });
 mk("listinactive", async ({ sock, from }) => sock.sendMessage(from, { text: "📋 Inactive list" }));
 mk("listrequest", async ({ sock, from }) => sock.sendMessage(from, { text: "📥 Pending requests" }));
+register("approve", { toggle: null, owner: true, run: async ({ sock, from, args }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  if (approvalJobs.has(from)) return sock.sendMessage(from, { text: "⏳ An approval process is already running. Use .cancelapprove to stop it." });
+  const requests = await sock.groupRequestParticipantsList(from);
+  const wanted = String(args[0] || "all").replace(/\D/g, "");
+  const pending = (requests || []).filter((request) => {
+    if (!wanted || wanted === "all") return true;
+    return cleanJid(request?.jid || request?.id) === wanted;
+  });
+  if (!pending.length) return sock.sendMessage(from, { text: "📥 No matching pending join request found." });
+  const job = { cancelled: false };
+  approvalJobs.set(from, job);
+  let approved = 0;
+  try {
+    for (const request of pending) {
+      if (job.cancelled) break;
+      const jid = request?.jid || request?.id;
+      if (!jid) continue;
+      await sock.groupRequestParticipantsUpdate(from, [jid], "approve");
+      approved += 1;
+    }
+    await sock.sendMessage(from, {
+      text: job.cancelled
+        ? `🛑 Approval cancelled. Approved ${approved}/${pending.length} request(s) before cancellation.`
+        : `✅ Approved ${approved} pending request(s).`,
+    });
+  } finally {
+    if (approvalJobs.get(from) === job) approvalJobs.delete(from);
+  }
+}});
+register("cancelapprove", { toggle: null, owner: true, run: async ({ sock, from }) => {
+  const job = approvalJobs.get(from);
+  if (!job) return sock.sendMessage(from, { text: "ℹ️ No approval process is currently running." });
+  job.cancelled = true;
+  await sock.sendMessage(from, { text: "🛑 Approval cancellation requested. The current request will stop after its active operation." });
+}});
 mk("delgrouppp", async ({ sock, from }) => {
   await sock.removeProfilePicture(from);
   await sock.sendMessage(from, { text: "🗑️ Group PP deleted" });

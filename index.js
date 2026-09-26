@@ -1424,10 +1424,15 @@ register("statuspost", {
     if (!text) return sock.sendMessage(from, { text: "Usage: .statuspost <text>" });
     try {
       const md = await sock.groupMetadata(from);
-      const statusJidList = md.participants.map((p) => p.id).filter(Boolean);
-      const result = await sock.sendMessage("status@broadcast", { text }, { statusJidList });
+      const rawAudience = md.participants
+        .map((p) => p?.jid || p?.phoneNumber || p?.id)
+        .filter((jid) => jid && !String(jid).endsWith("@g.us"));
+      const statusJidList = [...new Set((await Promise.all(rawAudience.map((jid) => resolveOriginalJid(sock, jid))))
+        .filter((jid) => String(jid).endsWith("@s.whatsapp.net")))];
+      if (!statusJidList.length) throw new Error("No valid WhatsApp audience JIDs found for this group");
+      const result = await sock.sendMessage("status@broadcast", { text }, { statusJidList, broadcast: true });
       if (!result?.key?.id) throw new Error("WhatsApp did not return a status message id");
-      await sock.sendMessage(from, { text: `╭━━━❰ *GC STATUS* ❱━━━╮\n┃ ✅ WhatsApp accepted the status request\n┃ 👥 Audience list: ${statusJidList.length} group members\n┃ ℹ️ Visibility depends on WhatsApp status privacy/account support\n╰━━━━━━━━━━━━━━━━━━━━╯` });
+      await sock.sendMessage(from, { text: `╭━━━❰ *GC STATUS* ❱━━━╮\n┃ ✅ Status published successfully\n┃ 👥 Audience: ${statusJidList.length} group members\n┃ 📡 Broadcast mode: enabled\n╰━━━━━━━━━━━━━━━━━━━━╯` });
     } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
   },
 });

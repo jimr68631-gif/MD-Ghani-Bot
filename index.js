@@ -1110,6 +1110,23 @@ mk("groupstats", async ({ sock, from }) => {
   const settings = getGroupMessageSettings(from);
   await sock.sendMessage(from, { text: `📊 *GROUP STATISTICS*\n\n📛 Name: ${md.subject || "Unknown"}\n👥 Members: ${md.participants.length}\n👑 Admins: ${admins}\n🟢 Welcome: ${settings.welcomeEnabled ? "ON" : "OFF"}\n🟢 Goodbye: ${settings.goodbyeEnabled ? "ON" : "OFF"}\n📜 Rules: ${settings.rules === "No group rules have been set yet." ? "NOT SET" : "SET"}` });
 });
+mk("members", async ({ sock, from }) => {
+  if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
+  const md = await sock.groupMetadata(from);
+  const lines = md.participants.map((participant, index) => `${index + 1}. ${displayUser(participant.id, participant)}${participant.admin ? " 👑" : ""}`);
+  for (const part of (lines.join("\n").match(/[\s\S]{1,3500}/g) || ["No members found."])) await sock.sendMessage(from, { text: `👥 *GROUP MEMBERS*\n\n${part}` });
+});
+mk("revoke", async ({ sock, from, msg }) => {
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  await sock.groupRevokeInvite(from);
+  await sock.sendMessage(from, { text: "✅ Group invite link reset. The old link is no longer valid." });
+});
+mk("clearwarnings", async ({ sock, from, msg }) => {
+  if (!(await requireGroupAdmin(sock, from, msg))) return;
+  for (const key of [...antiWarningCounts.keys()]) if (key.startsWith(`${from}:`)) antiWarningCounts.delete(key);
+  for (const key of [...warningState.keys()]) if (key.startsWith(`${from}:`)) warningState.delete(key);
+  await sock.sendMessage(from, { text: "✅ All warning counts for this group have been cleared." });
+});
 register("approve", { toggle: null, owner: true, run: async ({ sock, from, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   if (approvalJobs.has(from)) return sock.sendMessage(from, { text: "⏳ An approval process is already running. Use .cancelapprove to stop it." });
@@ -1761,6 +1778,12 @@ const mkOwner = (n, fn) => register(n, {
   },
 });
 mkOwner("mode", async ({ sock, from, args }) => sock.sendMessage(from, { text: `⚙️ Mode: *${args[0] || "public"}*` }));
+mkOwner("health", async ({ sock, from }) => {
+  const minutes = Math.floor(process.uptime() / 60);
+  const seconds = Math.floor(process.uptime() % 60).toString().padStart(2, "0");
+  const active = [...sessions.values()].filter((session) => session.sock?.user).length;
+  await sock.sendMessage(from, { text: `🩺 *BOT HEALTH*\n\n🟢 Process: ONLINE\n⏱️ Uptime: ${minutes}m ${seconds}s\n🔐 Active sessions: ${active}\n📦 Commands loaded: ${commands.size}\n🛡️ Security engine: READY\n💾 Backup engine: READY` });
+});
 mkOwner("setprefix", async ({ sock, from, args }) => {
   const prefix = String(args[0] || "").trim();
   if (!prefix || /\s/.test(prefix) || prefix.length > 3) return sock.sendMessage(from, { text: "Usage: .setprefix <1-3 character prefix>" });

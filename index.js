@@ -710,7 +710,11 @@ async function isBotAdmin(sock, from) {
 }
 
 function isController(sock, from, msg, sessionId) {
-  const sender = msg?.key?.participant || (msg?.key?.fromMe ? (sock.user?.id || sock.user?.lid) : from);
+  // Messages sent by the connected WhatsApp account can carry a LID in
+  // participant; fromMe is the reliable owner signal in that case.
+  const sender = msg?.key?.fromMe
+    ? (sock.user?.id || sock.user?.lid || from)
+    : (msg?.key?.participant || from);
   const values = [sender].filter(Boolean).map((v) => String(v).split(":")[0].split("@")[0]);
   const owners = config.owner.map((v) => String(v).split("@")[0]);
   const connected = String(sessionId).replace(/\D/g, "");

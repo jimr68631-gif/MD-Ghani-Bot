@@ -2184,12 +2184,21 @@ register("menu", {
         serverMessageId: -1,
       },
     };
-    try {
-      await sock.sendMessage(from, { text: menuText, contextInfo });
-    } catch (e) {
-      log.error(`menu button fallback: ${e?.message || e}`);
-      const safeParts = menuText.match(/[\s\S]{1,3500}/g) || [menuText];
-      for (const part of safeParts) await sock.sendMessage(from, { text: part });
+    // Keep every command line intact; never split the menu in the middle of a word.
+    const safeParts = [];
+    let current = "";
+    for (const line of menuText.split("\n")) {
+      const next = current ? `${current}\n${line}` : line;
+      if (current && next.length > 3500) {
+        safeParts.push(current);
+        current = line;
+      } else {
+        current = next;
+      }
+    }
+    if (current) safeParts.push(current);
+    for (const part of safeParts) {
+      await sock.sendMessage(from, { text: part, contextInfo });
     }
   },
 });

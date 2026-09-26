@@ -58,6 +58,12 @@ function displayUser(jid, participant = null) {
   const name = participant?.name || participant?.notify || participant?.verifiedName;
   return name && number ? `${name} (+${number})` : name || (number ? `+${number}` : "Unknown user");
 }
+function reportIdentity(identity) {
+  const number = cleanJid(identity?.jid);
+  const rawName = String(identity?.name || "").trim();
+  const name = /^(unknown user|whatsapp contact|\+?\d+)$/i.test(rawName) ? "" : rawName;
+  return name && number ? `${name} (+${number})` : name || (number ? `+${number}` : "Unknown user");
+}
 
 /* ============================================================
  *  0. DOCKERFILE / ENV SELF-CHECK
@@ -537,6 +543,7 @@ function wireHandlers(sessionId) {
         const old = findCachedRecord(deletedKey);
         if (!old) continue;
         const oldMessage = unwrapMessage(old.message);
+        if (!oldMessage || (old.key?.fromMe && old.key?.remoteJid === botInbox)) continue;
         const source = deletedChat;
         const isGroup = source.endsWith("@g.us");
         const isChannel = source.endsWith("@newsletter") || source === "status@broadcast";
@@ -567,9 +574,8 @@ function wireHandlers(sessionId) {
         );
         const originalSender = senderIdentity.jid;
         const deletedBy = deletedByIdentity.jid;
-        const clean = (jid) => cleanJid(jid) || "Unknown";
-        const senderName = senderIdentity.name;
-        const deletedByName = deletedByIdentity.name;
+        const senderLabel = reportIdentity(senderIdentity);
+        const deletedByLabel = reportIdentity(deletedByIdentity);
         const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
           ? cachedGroup.data.subject
           : (isChannel ? "WhatsApp Channel/Status" : (isGroup ? "WhatsApp Group" : "Personal Inbox"));
@@ -582,22 +588,19 @@ function wireHandlers(sessionId) {
         const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ||
           oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption ||
           oldMessage?.documentMessage?.caption || oldMessage?.audioMessage?.caption || "";
+        if (/ANTIDELETE REPORT|Message Deleted & Recovered|Source Chat:/i.test(rawText)) continue;
         const text = rawText.replace(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi, "").trim() || "[No text content in this message]";
         const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
         const report = `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮
-┃ 🗑️ *Message Deleted & Recovered*
+┃ 🗑️ Recovered: *${type}*
+┃ 📌 Source: ${sourceName}
+┃ 👤 Sent by: ${senderLabel}
+┃ 🗑️ Deleted by: ${deletedByLabel}
+┃ 🕒 ${deletedAt}
 ╰━━━━━━━━━━━━━━━━━━━━╯
-
-📌 *Source Chat:* ${sourceName}
-👤 *Sent By:* ${senderName} (+${clean(originalSender)})
-🗑️ *Deleted By:* ${deletedByName} (+${clean(deletedBy)})
-📂 *Message Type:* ${type}
-🕒 *Detected At:* ${deletedAt}
-
-💬 *Message Content:*
-${text}`;
+💬 ${text}`;
         await sock.sendMessage(botInbox, { text: report }).catch(() => {});
-        const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: ${senderName} (+${clean(originalSender)})\n🗑️ Deleted by: ${deletedByName} (+${clean(deletedBy)})`;
+        const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: ${senderLabel}\n🗑️ Deleted by: ${deletedByLabel}`;
         try {
           const fake = { key: old.key, message: old.message };
           if (oldMessage?.imageMessage) {
@@ -616,7 +619,7 @@ ${text}`;
             const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { sticker: media });
           } else if (oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || rawText) {
-            await sock.sendMessage(botInbox, { text: `💬 *Recovered Message*\n\n${rawText}\n\n${mediaCaption}` });
+            // Text is already included in the concise report above; do not send a second nested report.
           } else if (oldMessage?.contactMessage || oldMessage?.locationMessage || oldMessage?.pollCreationMessage) {
             await sock.sendMessage(botInbox, { text: `📦 *Recovered ${type}*\n\n${JSON.stringify(oldMessage[`${type.charAt(0).toLowerCase()}${type.slice(1)}Message`] || oldMessage, null, 2)}\n\n${mediaCaption}` });
           } else {

@@ -337,7 +337,7 @@ function findCachedRecord(key) {
     if (cached) return cached;
     const persisted = persistentMessageCache.get(id);
     if (persisted) return persisted;
-    for (const candidate of [...messageRetryCache.values(), ...deletedMessageCache.values()]) {
+    for (const candidate of [...messageRetryCache.values(), ...deletedMessageCache.values(), ...persistentMessageCache.values()]) {
       if (String(candidate?.key?.id || candidate?.message?.key?.id || "") !== id) continue;
       const candidateJids = [candidate?.key?.remoteJid, candidate?.key?.remoteJidAlt, candidate?.message?.key?.remoteJid, candidate?.message?.key?.remoteJidAlt].filter(Boolean);
       const wantedJids = [key?.remoteJid, key?.remoteJidAlt].filter(Boolean);
@@ -591,8 +591,9 @@ function wireHandlers(sessionId) {
           await sock.sendMessage(botInbox, { text: `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮\n┃ 🗑️ Deleted message detected\n┃ 📌 Source: ${deletedChat.endsWith("@g.us") ? "WhatsApp Group" : "Personal Inbox"}\n┃ 👤 Sender: ${fallbackSender ? `+${fallbackSender}` : "Unknown"}\n┃ ⚠️ Content unavailable in cache\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
           continue;
         }
-        const oldMessage = unwrapMessage(old.message);
-        if (!oldMessage || (old.key?.fromMe && old.key?.remoteJid === botInbox)) continue;
+        const oldMessage = unwrapMessage(old?.message || old);
+        const oldKey = old?.key || old?.message?.key;
+        if (!oldMessage || (oldKey?.fromMe && oldKey?.remoteJid === botInbox)) continue;
         const source = deletedChat;
         const isGroup = source.endsWith("@g.us");
         const isChannel = source.endsWith("@newsletter") || source === "status@broadcast";
@@ -608,8 +609,8 @@ function wireHandlers(sessionId) {
         const senderIdentity = await resolveUserIdentity(
           sock,
           isGroup
-            ? [old.key?.participantAlt, old.key?.participant]
-            : [old.key?.participantAlt, old.key?.participant, old.key?.remoteJidAlt, old.key?.remoteJid],
+            ? [oldKey?.participantAlt, oldKey?.participant]
+            : [oldKey?.participantAlt, oldKey?.participant, oldKey?.remoteJidAlt, oldKey?.remoteJid],
           participants,
           old.pushName,
         );
@@ -651,7 +652,7 @@ function wireHandlers(sessionId) {
         await sock.sendMessage(botInbox, { text: report }).catch(() => {});
         const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: ${senderLabel}\n🗑️ Deleted by: ${deletedByLabel}`;
         try {
-          const fake = { key: old.key, message: old.message };
+          const fake = { key: oldKey, message: old?.message || oldMessage };
           if (oldMessage?.imageMessage) {
             const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { image: media, caption: mediaCaption });

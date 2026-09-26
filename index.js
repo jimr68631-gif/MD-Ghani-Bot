@@ -279,6 +279,7 @@ const deletedMessageCache = new Map();
 // Keep recent full messages available for Baileys retry/decryption requests.
 const messageRetryCache = new Map();
 const messageIdCache = new Map();
+const antideleteHandled = new Set();
 function messageCacheKeys(key) {
   const id = key?.id;
   if (!id) return [];
@@ -540,8 +541,20 @@ function wireHandlers(sessionId) {
       const deletedChat = deletedKey?.remoteJid;
       const deletedId = deletedKey?.id;
       if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(sessionId).antidelete) {
-        const old = findCachedRecord(deletedKey);
-        if (!old) continue;
+        const deleteToken = `${deletedChat}:${deletedId}`;
+        if (antideleteHandled.has(deleteToken)) continue;
+        let old = findCachedRecord(deletedKey);
+        if (!old) {
+          await new Promise((resolve) => setTimeout(resolve, 700));
+          old = findCachedRecord(deletedKey);
+        }
+        antideleteHandled.add(deleteToken);
+        if (antideleteHandled.size > 10000) antideleteHandled.delete(antideleteHandled.values().next().value);
+        if (!old) {
+          const fallbackSender = cleanJid(deletedKey.participantAlt || deletedKey.participant || deletedKey.remoteJidAlt || deletedKey.remoteJid);
+          await sock.sendMessage(botInbox, { text: `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮\n┃ 🗑️ Deleted message detected\n┃ 📌 Source: ${deletedChat.endsWith("@g.us") ? "WhatsApp Group" : "Personal Inbox"}\n┃ 👤 Sender: ${fallbackSender ? `+${fallbackSender}` : "Unknown"}\n┃ ⚠️ Content unavailable in cache\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
+          continue;
+        }
         const oldMessage = unwrapMessage(old.message);
         if (!oldMessage || (old.key?.fromMe && old.key?.remoteJid === botInbox)) continue;
         const source = deletedChat;

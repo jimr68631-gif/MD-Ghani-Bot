@@ -349,7 +349,11 @@ function findCachedRecord(key) {
   return undefined;
 }
 function findCachedMessage(key) {
-  return findCachedRecord(key)?.message;
+  const record = findCachedRecord(key);
+  if (!record) return undefined;
+  // Baileys getMessage must receive only WAMessageContent, not the wrapper.
+  // Accept both shapes because older cache files may contain the body directly.
+  return record?.key && record?.message ? record.message : record;
 }
 const warningState = new Map();
 let baileysVersionPromise;
@@ -411,7 +415,8 @@ async function startSession(sessionId, phoneNumber) {
     generateHighQualityLinkPreview: true,
     defaultQueryTimeoutMs: undefined,
     getMessage: async (key) => {
-      return findCachedMessage(key);
+      const content = findCachedMessage(key);
+      return content && typeof content === "object" ? content : undefined;
     },
   });
 

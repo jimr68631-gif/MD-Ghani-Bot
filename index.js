@@ -217,6 +217,23 @@ async function resolveOriginalJid(sock, jid) {
   }
   return jid;
 }
+async function resolveUserIdentity(sock, candidates, participants = [], fallbackName = "") {
+  const rawCandidates = [...new Set((Array.isArray(candidates) ? candidates : [candidates]).filter(Boolean))];
+  let resolvedCandidates = [];
+  for (const raw of rawCandidates) {
+    const resolved = await resolveOriginalJid(sock, raw);
+    resolvedCandidates.push(raw, resolved);
+  }
+  resolvedCandidates = [...new Set(resolvedCandidates.filter(Boolean))];
+  const participant = participants.find((p) => {
+    const ids = [p?.id, p?.jid, p?.phoneNumber].filter(Boolean).map(String);
+    return ids.some((id) => resolvedCandidates.includes(id) || cleanJid(id) === cleanJid(resolvedCandidates[0]));
+  });
+  const jid = participant?.jid || participant?.phoneNumber ||
+    resolvedCandidates.find((id) => !String(id).endsWith("@lid")) || resolvedCandidates[0] || "Unknown";
+  const name = fallbackName || participant?.name || participant?.notify || participant?.verifiedName || "Unknown user";
+  return { jid, name };
+}
 const getToggles = (id) => {
   if (!toggleState.has(id)) toggleState.set(id, { ...defaultToggles });
   return toggleState.get(id);
@@ -468,16 +485,34 @@ function wireHandlers(sessionId) {
         if (!old) continue;
         const oldMessage = unwrapMessage(old.message);
         const source = deletedChat;
-        const originalSender = await resolveOriginalJid(sock, old.key?.participantAlt || old.key?.participant || old.key?.remoteJid || "Unknown");
-        const deletedBy = await resolveOriginalJid(sock, item.key?.participantAlt || item.key?.participant || item.key?.remoteJid || "Unknown");
-        const clean = (jid) => String(jid).split("@")[0].split(":")[0];
         const isGroup = source.endsWith("@g.us");
         const isChannel = source.endsWith("@newsletter") || source === "status@broadcast";
-        const cachedGroup = isGroup ? groupMetadataCache.get(source) : null;
+        let cachedGroup = isGroup ? groupMetadataCache.get(source) : null;
+        if (isGroup && (!cachedGroup || cachedGroup.expires <= Date.now())) {
+          try {
+            const data = await sock.groupMetadata(source);
+            cachedGroup = { data, expires: Date.now() + 30000 };
+            groupMetadataCache.set(source, cachedGroup);
+          } catch {}
+        }
         const participants = cachedGroup?.data?.participants || [];
-        const findParticipant = (jid) => participants.find((p) => p.id === jid || p.jid === jid || p.id === old.key?.participant || p.jid === old.key?.participant);
-        const senderName = old.pushName || findParticipant(originalSender)?.name || findParticipant(originalSender)?.notify || "Unknown user";
-        const deletedByName = item.pushName || findParticipant(deletedBy)?.name || findParticipant(deletedBy)?.notify || "Unknown user";
+        const senderIdentity = await resolveUserIdentity(
+          sock,
+          [old.key?.participantAlt, old.key?.participant, old.key?.remoteJidAlt, old.key?.remoteJid],
+          participants,
+          old.pushName,
+        );
+        const deletedByIdentity = await resolveUserIdentity(
+          sock,
+          [item.key?.participantAlt, item.key?.participant, item.key?.remoteJidAlt, item.key?.remoteJid],
+          participants,
+          item.pushName,
+        );
+        const originalSender = senderIdentity.jid;
+        const deletedBy = deletedByIdentity.jid;
+        const clean = (jid) => cleanJid(jid) || "Unknown";
+        const senderName = senderIdentity.name;
+        const deletedByName = deletedByIdentity.name;
         const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
           ? cachedGroup.data.subject
           : (isChannel ? "WhatsApp Channel/Status" : (isGroup ? "WhatsApp Group" : "Personal Inbox"));

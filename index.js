@@ -233,11 +233,12 @@ async function resolveUserIdentity(sock, candidates, participants = [], fallback
   resolvedCandidates = [...new Set(resolvedCandidates.filter(Boolean))];
   const participant = participants.find((p) => {
     const ids = [p?.id, p?.jid, p?.phoneNumber].filter(Boolean).map(String);
-    return ids.some((id) => resolvedCandidates.includes(id) || cleanJid(id) === cleanJid(resolvedCandidates[0]));
+    return ids.some((id) => resolvedCandidates.includes(id) || resolvedCandidates.some((candidate) => cleanJid(id) && cleanJid(id) === cleanJid(candidate)));
   });
-  const jid = participant?.jid || participant?.phoneNumber ||
-    resolvedCandidates.find((id) => !String(id).endsWith("@lid")) || resolvedCandidates[0] || "Unknown";
-  const name = fallbackName || participant?.name || participant?.notify || participant?.verifiedName || "Unknown user";
+  const jid = participant?.phoneNumber || participant?.jid ||
+    resolvedCandidates.find((id) => !String(id).endsWith("@lid") && !String(id).endsWith("@g.us")) || resolvedCandidates[0] || "Unknown";
+  const name = fallbackName || participant?.name || participant?.notify || participant?.verifiedName ||
+    (cleanJid(jid) ? "WhatsApp contact" : "Unknown user");
   return { jid, name };
 }
 const getToggles = (id) => {
@@ -530,13 +531,17 @@ function wireHandlers(sessionId) {
         const participants = cachedGroup?.data?.participants || [];
         const senderIdentity = await resolveUserIdentity(
           sock,
-          [old.key?.participantAlt, old.key?.participant, old.key?.remoteJidAlt, old.key?.remoteJid],
+          isGroup
+            ? [old.key?.participantAlt, old.key?.participant]
+            : [old.key?.participantAlt, old.key?.participant, old.key?.remoteJidAlt, old.key?.remoteJid],
           participants,
           old.pushName,
         );
         const deletedByIdentity = await resolveUserIdentity(
           sock,
-          [item.key?.participantAlt, item.key?.participant, item.key?.remoteJidAlt, item.key?.remoteJid],
+          isGroup
+            ? [item.key?.participantAlt, item.key?.participant, item.update?.message?.protocolMessage?.key?.participant]
+            : [item.key?.participantAlt, item.key?.participant, item.key?.remoteJidAlt, item.key?.remoteJid],
           participants,
           item.pushName,
         );
@@ -817,9 +822,7 @@ async function handleMessage(sock, msg, sessionId) {
     const controller = isController(sock, from, msg, sessionId);
     // Group members must not be able to operate the bot. Only the connected
     // owner may use commands in any group where this bot is present.
-    if (groupChat && !controller) {
-      return sock.sendMessage(from, { text: "╭━━━❰ *ACCESS RESTRICTED* ❱━━━╮\n┃ 🚫 This command is restricted.\n┃ 👑 Only the connected bot owner can use commands here.\n╰━━━━━━━━━━━━━━━━━━━━╯" }).catch(() => {});
-    }
+    if (groupChat && !controller) return;
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
     if (groupChat && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
     let cmd = commands.get(normalizedCommand);
@@ -878,9 +881,7 @@ async function handleMessage(sock, msg, sessionId) {
         return sock.sendMessage(from, { text: "🚫 This bot accepts commands only from its connected owner." });
       }
     } else if (ownerCommand) {
-      if (!isController(sock, from, msg, sessionId)) {
-        return sock.sendMessage(from, { text: "🚫 Owner-only command." });
-      }
+      if (!isController(sock, from, msg, sessionId)) return;
       if (!(await requireBotAdminOnly(sock, from))) return;
     } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
       const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
@@ -1446,7 +1447,9 @@ async function downloadWithYtDlp(input, kind) {
   const base = path.join(os.tmpdir(), `md-ghani-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const output = `${base}.${ext}`;
   try {
-    const format = kind === "audio" ? "bestaudio/best" : "bv*[height<=720]+ba/b[height<=720]/b";
+    const format = kind === "audio"
+      ? "ba[ext=m4a]/ba[ext=webm]/bestaudio/best"
+      : "bv*[height<=480]+ba/b[height<=480]/bv*[height<=720]+ba/b[height<=720]/b";
     const binary = await getYtDlpBinary();
     // YouTube currently serves playable formats reliably through web_safari.
     // Older clients often return "video unavailable", which caused every
@@ -1455,7 +1458,7 @@ async function downloadWithYtDlp(input, kind) {
     const cookieFile = process.env.YOUTUBE_COOKIES_FILE;
     let lastError;
     for (const client of clients) {
-      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
+      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "-f", format, "-o", output];
       if (cookieFile && fs.existsSync(cookieFile)) args.push("--cookies", cookieFile);
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
       args.push(url);
@@ -2020,21 +2023,27 @@ register("getid", { toggle: null, run: async ({ sock, from, msg }) => {
   await sock.sendMessage(from, { text: `👤 User: ${displayUser(t, participant)}\n🆔 WhatsApp ID: ${t}` });
 }});
 register("profile", { toggle: null, run: async ({ sock, from, msg, args }) => {
-  const t = await resolveOriginalJid(sock, getTargetJid(msg, args, msg?.key?.participant || from));
-  const clean = String(t).split(":")[0].split("@")[0];
-  let name = `+${clean}`;
+  const fallback = msg?.key?.fromMe ? (sock.user?.id || sock.user?.lid) : (msg?.key?.participant || from);
+  const rawTarget = getTargetJid(msg, args, fallback);
+  let t = await resolveOriginalJid(sock, rawTarget);
+  let name = "Unknown user";
   let admin = "Private chat";
   let groupSubject = "Private chat";
   if (from.endsWith("@g.us")) {
     const md = await sock.groupMetadata(from);
-    const p = md.participants.find((x) => x.id === t || x.jid === t || String(x.id).split(":")[0] === clean);
-    name = p?.name || p?.notify || p?.verifiedName || name;
+    const identity = await resolveUserIdentity(sock, [rawTarget, t], md.participants, msg?.pushName || sock.user?.name || sock.user?.verifiedName);
+    t = identity.jid;
+    const p = md.participants.find((x) => [x.id, x.jid, x.phoneNumber].filter(Boolean).some((id) => cleanJid(id) === cleanJid(t)));
+    name = identity.name || p?.name || p?.notify || p?.verifiedName || name;
     admin = p?.admin || p?.isAdmin || p?.role || "member";
     groupSubject = md.subject || groupSubject;
+  } else if (typeof sock.onWhatsApp === "function") {
+    try { const contact = (await sock.onWhatsApp(t))?.[0]; name = contact?.verifiedName || contact?.notify || msg?.pushName || sock.user?.name || sock.user?.verifiedName || name; } catch {}
   }
+  const clean = cleanJid(t) || "Unknown";
   let about = "Unavailable";
   try { about = (await sock.fetchStatus(t))?.status || "No about/status"; } catch {}
-  if (name === `+${clean}` && typeof sock.onWhatsApp === "function") {
+  if (name === "Unknown user" && typeof sock.onWhatsApp === "function") {
     try {
       const contact = (await sock.onWhatsApp(t))?.[0];
       name = contact?.verifiedName || contact?.notify || name;
@@ -2191,8 +2200,10 @@ registerSuggested("keywordreply", { run: async ({ sock, from, args }) => {
   await sock.sendMessage(from, { text: `🔤 *KEYWORD REPLIES*\n\n${list}\n\nUsage: .keywordreply add <word> <reply>` });
 }});
 registerSuggested("report", { run: async ({ sock, from, msg, args }) => {
-  const target = getTargetJid(msg, args); const reason = args.filter((a) => !/^\d+$/.test(a)).join(" ") || "No reason provided";
-  await sock.sendMessage(suggestedOwnerInbox(sock), { text: `🚩 *GROUP REPORT*\n\nGroup: ${from}\nUser: ${displayUser(target || msg.key?.participant || from)}\nReason: ${reason}` });
+  const sender = msg?.key?.fromMe ? (sock.user?.id || sock.user?.lid) : msg?.key?.participant;
+  const target = getTargetJid(msg, args, sender || null); const reason = args.filter((a) => !/^\d+$/.test(a)).join(" ") || "No reason provided";
+  const groupName = from.endsWith("@g.us") ? ((await sock.groupMetadata(from).catch(() => null))?.subject || "Group") : "Private Chat";
+  await sock.sendMessage(suggestedOwnerInbox(sock), { text: `🚩 *GROUP REPORT*\n\nGroup: ${groupName}\nUser: ${displayUser(target || sender)}\nReason: ${reason}` });
   await sock.sendMessage(from, { text: "✅ Report sent to the bot owner." });
 }});
 registerSuggested("poll", { run: async ({ sock, from, args }) => {

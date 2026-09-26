@@ -463,7 +463,7 @@ function wireHandlers(sessionId) {
       const deletedKey = item.update?.message?.protocolMessage?.key || item.key;
       const deletedChat = deletedKey?.remoteJid;
       const deletedId = deletedKey?.id;
-      if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(deletedChat.endsWith("@g.us") ? deletedChat : sessionId).antidelete) {
+      if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(sessionId).antidelete) {
         const old = findCachedMessage(deletedKey);
         if (!old) continue;
         const oldMessage = unwrapMessage(old.message);
@@ -493,7 +493,6 @@ function wireHandlers(sessionId) {
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 📌 *Source Chat:* ${sourceName}
-🆔 *Chat ID:* ${source}
 👤 *Sent By:* ${senderName} (+${clean(originalSender)})
 🗑️ *Deleted By:* ${deletedByName} (+${clean(deletedBy)})
 📂 *Message Type:* ${type}
@@ -676,8 +675,8 @@ async function isBotAdmin(sock, from) {
 }
 
 function isController(sock, from, msg, sessionId) {
-  const sender = msg?.key?.participant || from;
-  const values = [sender, sock.user?.id, sock.user?.lid].filter(Boolean).map((v) => String(v).split(":")[0].split("@")[0]);
+  const sender = msg?.key?.participant || (msg?.key?.fromMe ? (sock.user?.id || sock.user?.lid) : from);
+  const values = [sender].filter(Boolean).map((v) => String(v).split(":")[0].split("@")[0]);
   const owners = config.owner.map((v) => String(v).split("@")[0]);
   const connected = String(sessionId).replace(/\D/g, "");
   return values.some((v) => owners.includes(v) || (connected && v === connected));
@@ -970,14 +969,15 @@ for (const name of ANTI_LIST) {
   register(name, {
     toggle: null,
     run: async ({ sock, from, args, sessionId }) => {
+      const scope = name === "antidelete" ? sessionId : (from.endsWith("@g.us") ? from : sessionId);
       if (!args[0]) {
-        const t = getToggles(from.endsWith("@g.us") ? from : sessionId);
+        const t = getToggles(scope);
         return sock.sendMessage(from, {
           text: styledToggleReply(name, t[name], `Usage: .${name} on/off`),
         });
       }
-      const ok = setToggle(from.endsWith("@g.us") ? from : sessionId, name, args[0]);
-      await sock.sendMessage(from, { text: ok ? styledToggleReply(name, getToggles(from.endsWith("@g.us") ? from : sessionId)[name], "Updated") : styledToggleReply(name, false, "Unknown toggle") });
+      const ok = setToggle(scope, name, args[0]);
+      await sock.sendMessage(from, { text: ok ? styledToggleReply(name, getToggles(scope)[name], "Updated") : styledToggleReply(name, false, "Unknown toggle") });
     },
   });
 }

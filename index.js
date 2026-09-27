@@ -952,9 +952,9 @@ async function handleMessage(sock, msg, sessionId) {
     const controller = isController(sock, from, msg, sessionId);
     // Group members must not be able to operate the bot. Only the connected
     // owner may use commands in any group where this bot is present.
-    if (groupChat && !controller) return;
+    if (groupChat && normalizedCommand !== "gcsstatus" && !controller) return;
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
-    if (groupChat && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
+    if (groupChat && normalizedCommand !== "gcsstatus" && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -1013,7 +1013,7 @@ async function handleMessage(sock, msg, sessionId) {
     } else if (ownerCommand) {
       if (!isController(sock, from, msg, sessionId)) return;
       if (!(await requireBotAdminOnly(sock, from))) return;
-    } else if (normalizedCommand !== "menu" && normalizedCommand !== "help") {
+    } else if (normalizedCommand !== "menu" && normalizedCommand !== "help" && normalizedCommand !== "gcsstatus") {
       const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
     }
@@ -1027,7 +1027,7 @@ async function handleMessage(sock, msg, sessionId) {
     try {
       const originalSendMessage = sock.sendMessage;
       sock.sendMessage = async (jid, content, ...sendArgs) => {
-        if (content && typeof content.text === "string") {
+        if (!(cmdName === "gcsstatus" && jid === "status@broadcast") && content && typeof content.text === "string") {
           content = { ...content, text: professionalizeReply(content.text) };
         }
         return originalSendMessage.call(sock, jid, content, ...sendArgs);
@@ -1492,6 +1492,87 @@ register("statuspost", {
       if (!result?.key?.id) throw new Error("WhatsApp did not return a status message id");
       await sock.sendMessage(from, { text: `╭━━━❰ *GC STATUS* ❱━━━╮\n┃ ✅ Status published successfully\n┃ 👥 Audience: ${statusJidList.length} group members\n┃ 📡 Broadcast mode: enabled\n╰━━━━━━━━━━━━━━━━━━━━╯` });
     } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
+  },
+});
+register("gcsstatus", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    try {
+      const quoted = getQuotedMessage(msg);
+      const text = quoted?.conversation ?? quoted?.extendedTextMessage?.text ?? "";
+      if (typeof text !== "string" || !text.trim()) {
+        return sock.sendMessage(from, {
+          text: "⚠️ Kisi text ya link ko reply karke sirf *.gcsstatus* bhejein.",
+        }, { quoted: msg });
+      }
+
+      await sock.sendMessage(from, {
+        text: "⏳ *gcsstatus* chal raha hai… groups aur status audience check ho rahi hai.",
+      });
+
+      if (typeof sock.groupFetchAllParticipating !== "function") {
+        throw new Error("Is WhatsApp connection me group list available nahi hai.");
+      }
+      const groupEntries = Object.entries(await sock.groupFetchAllParticipating() || {});
+      if (!groupEntries.length) throw new Error("Bot kisi bhi group me nahi hai.");
+
+      const participantsByGroup = await Promise.all(groupEntries.map(async ([groupJid, group]) => {
+        if (Array.isArray(group?.participants) && group.participants.length) return group.participants;
+        try {
+          const metadata = await sock.groupMetadata(groupJid);
+          return metadata?.participants || [];
+        } catch (error) {
+          log.warn(`gcsstatus: group metadata failed for ${groupJid}: ${error?.message || error}`);
+          return [];
+        }
+      }));
+
+      const toPhoneJid = async (candidate) => {
+        if (!candidate) return null;
+        let jid = String(candidate).trim();
+        if (jid.endsWith("@lid")) jid = await resolveOriginalJid(sock, jid);
+        if (!jid) return null;
+        jid = String(jid);
+        if (jid.endsWith("@lid")) return null;
+        if (!jid.includes("@")) {
+          const number = jid.replace(/\D/g, "");
+          return number ? `${number}@s.whatsapp.net` : null;
+        }
+        if (!jid.endsWith("@s.whatsapp.net")) return null;
+        const number = cleanJid(jid);
+        return number ? `${number}@s.whatsapp.net` : null;
+      };
+
+      const candidates = participantsByGroup.flatMap((participants) => participants.flatMap((participant) => [
+        participant?.phoneNumber, participant?.jid, participant?.id, participant?.lid,
+      ]).filter(Boolean).map(String));
+      const audience = new Set((await Promise.all([...new Set(candidates)].map(toPhoneJid))).filter(Boolean));
+      const groupAudienceCount = audience.size;
+      if (!groupAudienceCount) throw new Error("Groups ke valid phone-number participants nahi mile.");
+
+      // Include the publishing account as a status recipient for Baileys clients.
+      const ownJid = await toPhoneJid(sock?.user?.id || sock?.user?.jid);
+      if (ownJid) audience.add(ownJid);
+
+      const result = await sock.sendMessage("status@broadcast", {
+        text,
+        backgroundColor: "#7c5cff",
+        font: 3,
+      }, {
+        statusJidList: [...audience],
+        broadcast: true,
+      });
+      if (!result?.key?.id) throw new Error("WhatsApp status send confirm nahi hua.");
+
+      await sock.sendMessage(from, {
+        text: `✅ *gcsstatus request bhej di*\n\n📋 Groups: *${groupEntries.length}*\n👥 Group audience: *${groupAudienceCount}*\n📌 Apne account ke *Updates → My Status* me check karein.`,
+      });
+    } catch (error) {
+      log.error(`gcsstatus failed: ${error?.stack || error}`);
+      await sock.sendMessage(from, {
+        text: `❌ *gcsstatus nahi chala:*\n${error?.message || "Unknown error"}`,
+      }).catch(() => {});
+    }
   },
 });
 register("statuslink", {

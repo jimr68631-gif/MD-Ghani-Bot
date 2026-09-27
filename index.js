@@ -237,17 +237,17 @@ const antiWarningStyles = [
 ];
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag", "movie", "antidelete",
-  "welcome", "goodbye", "setwelcome", "setgoodbye",
+  "welcome", "goodbye", "setwelcome", "setgoodbye", "botstatus",
 ]);
 const GROUP_ADMIN_COMMANDS = new Set([
   "add", "kick", "promote", "demote", "kickall", "kickoffline", "leave",
   "tagall", "mention", "hidetag", "open", "close", "restrict", "unrestrict",
   "lock", "unlock", "announcement", "unannouncement", "setrules", "reject",
-  "rejectall", "revoke", "clearwarnings", "delgrouppp", "setgrouppp", "setname",
+  "rejectall", "approve", "revoke", "clearwarnings", "delgrouppp", "setgrouppp", "setname",
   "setdesc", "warn", "setwelcome", "setgoodbye", "setautoreply", "welcome", "goodbye",
   "groupdesc", "resetmember", "lockdown", "slowmode", "keywordreply", "groupbackup",
   "restoregroup", "maintenance", "antical", "antispamlink", "welcomeedit", "autostatuslinkkick",
-  "antilink", "set", "autoseen", "autotyping", "autorecording", "autoreact",
+  "antilink", "botstatus", "set", "autoseen", "autotyping", "autorecording", "autoreact",
   "autoviewstatus", "autoreactstatus", "autosavestatus", "autoreacttyping",
   "autorecordtyping", "autoreply", "antibadword", "antibot", "antibug", "anticontact",
   "antidelete", "antidemote", "antipromote", "antidocument", "antiedit", "antiforward",
@@ -354,6 +354,7 @@ const deletedMessageCache = new Map();
 const messageRetryCache = new Map();
 const messageIdCache = new Map();
 const antideleteHandled = new Set();
+const processedUpsertMessages = new Set();
 const persistentMessageCache = new Map();
 const persistentMessageCacheFile = path.resolve(config.sessionDir, ".antidelete-message-cache.json");
 let persistentWriteTimer = null;
@@ -597,12 +598,14 @@ function wireHandlers(sessionId) {
       if (protocolType === 0 || String(protocolType).toUpperCase() === "REVOKE") {
         // Baileys delivers message deletions as a REVOKE protocol message in
         // messages.upsert, not reliably through messages.update.
-        sock.ev.emit("messages.update", [{
-          key: msg.key,
-          update: { message: { protocolMessage: { ...protocol, type: 0 } } },
-          participant: msg.participant,
-          pushName: msg.pushName,
-        }]);
+        if (type === "notify") {
+          sock.ev.emit("messages.update", [{
+            key: msg.key,
+            update: { message: { protocolMessage: { ...protocol, type: 0 } } },
+            participant: msg.participant,
+            pushName: msg.pushName,
+          }]);
+        }
         continue;
       }
       cacheMessage(deletedMessageCache, msg);
@@ -610,6 +613,17 @@ function wireHandlers(sessionId) {
       if (deletedMessageCache.size > 1000) deletedMessageCache.delete(deletedMessageCache.keys().next().value);
       if (messageRetryCache.size > 5000) messageRetryCache.delete(messageRetryCache.keys().next().value);
       if (messageIdCache.size > 6000) messageIdCache.delete(messageIdCache.keys().next().value);
+      // Append events are history/backfill, not new user commands. Also ignore
+      // a repeated notify for the same WhatsApp message ID.
+      if (type !== "notify") continue;
+      const messageToken = msg.key?.id ? `${sessionId}:${msg.key.remoteJid || ""}:${msg.key.id}` : null;
+      if (messageToken) {
+        if (processedUpsertMessages.has(messageToken)) continue;
+        processedUpsertMessages.add(messageToken);
+        if (processedUpsertMessages.size > 10000) {
+          processedUpsertMessages.delete(processedUpsertMessages.values().next().value);
+        }
+      }
       Promise.resolve(runAuto(sock, msg, sessionId, toggles)).catch((e) => log.error(`auto: ${e.message}`));
       Promise.resolve(runAnti(sock, msg, sessionId, toggles)).catch((e) => log.error(`anti: ${e.message}`));
       Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
@@ -983,12 +997,6 @@ function isController(sock, from, msg, sessionId) {
   return values.some((v) => owners.includes(v) || (connected && v === connected));
 }
 
-async function requireBotAdminOnly(sock, from) {
-  const ok = await isBotAdmin(sock, from);
-  if (!ok) await sock.sendMessage(from, { text: "❌ Bot must be a group admin first." });
-  return ok;
-}
-
 /* ============================================================
  *  9. FAST MESSAGE HANDLER
  * ============================================================ */
@@ -1011,12 +1019,15 @@ async function handleMessage(sock, msg, sessionId) {
     if (OWNER_ONLY_SILENT_COMMANDS.has(normalizedCommand) && !isController(sock, from, msg, sessionId)) return;
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
+    // Keep group control private to the connected bot owner. Other members'
+    // commands remain silent, matching the prior group behavior.
+    if (groupChat && !controller) return;
     const requiresGroupAdmin = GROUP_ADMIN_COMMANDS.has(normalizedCommand);
     const groupAdmin = groupChat && requiresGroupAdmin
       ? await isUserAdmin(sock, from, [msg.key?.participantAlt, msg.key?.participant,
         ...(msg.key?.fromMe ? [sock.user?.id, sock.user?.lid] : [])])
       : false;
-    if (groupChat && requiresGroupAdmin && !controller && !groupAdmin) return;
+    if (groupChat && requiresGroupAdmin && !groupAdmin) return;
     const botAdmin = groupChat && requiresGroupAdmin ? await isBotAdmin(sock, from) : false;
     const botAdminOptional = normalizedCommand === "antidelete" ||
       (controller && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand));
@@ -1078,7 +1089,9 @@ async function handleMessage(sock, msg, sessionId) {
       }
     } else if (ownerCommand) {
       if (!isController(sock, from, msg, sessionId)) return;
-      if (!(await requireBotAdminOnly(sock, from))) return;
+      if (requiresGroupAdmin && !(await requireGroupAdmin(
+        sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)
+      ))) return;
     } else if (requiresGroupAdmin) {
       const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
@@ -1480,9 +1493,9 @@ register("set", {
 register("botstatus", {
   toggle: null,
   run: async ({ sock, from, msg }) => {
-    if (!(await requireGroupAdmin(sock, from, msg))) return;
+    if (!(await requireGroupAdmin(sock, from, msg, false))) return;
     const toggles = getToggles(from);
-    const botIsAdmin = await requireBotAdminOnly(sock, from);
+    const botIsAdmin = await isBotAdmin(sock, from);
     const anti = ANTI_LIST.filter((name) => toggles[name]);
     const enabled = [...commands.keys()].filter((name) => !ANTI_LIST.includes(name));
     const status = botIsAdmin ? "🟢 ACTIVE" : "🔴 INACTIVE — Bot is not group admin";

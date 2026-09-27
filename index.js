@@ -860,7 +860,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
   if (!(await isBotAdmin(sock, from))) return;
   toggles = getToggles(from);
 
-  const antiKeys = ["antilink", "antiinvite", "antispam", "antiflood", "antiraid", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
+  const antiKeys = ["antilink", "antiinvite", "antispam", "antiflood", "antiraid", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antistatus", "antiforward", "antiviewonce"];
   if (!antiKeys.some((key) => toggles[key])) return;
 
   const sender = msg.key.participantAlt || msg.key.participant || from;
@@ -901,6 +901,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
     ["antilocation", () => !!msg.message?.locationMessage],
     ["anticontact", () => !!msg.message?.contactMessage],
     ["antipoll", () => Object.keys(message || {}).some((key) => /^pollCreationMessage(?:V\d+)?$/.test(key) && !!message[key])],
+    ["antistatus", () => ["groupStatusMessage", "groupStatusMessageV2", "groupStatusMentionMessage", "statusMentionMessage"].some((key) => !!message?.[key])],
     ["antiforward", () => !!msg.message?.extendedTextMessage?.contextInfo?.forwardingScore],
     ["antiviewonce", () => !!(msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2)],
   ];

@@ -1497,6 +1497,8 @@ register("statuspost", {
 register("gcsstatus", {
   toggle: null,
   run: async ({ sock, from, msg }) => {
+    let sentBatches = 0;
+    let totalBatches = 0;
     try {
       const quoted = getQuotedMessage(msg);
       const text = quoted?.conversation ?? quoted?.extendedTextMessage?.text ?? "";
@@ -1547,30 +1549,41 @@ register("gcsstatus", {
         participant?.phoneNumber, participant?.jid, participant?.id, participant?.lid,
       ]).filter(Boolean).map(String));
       const audience = new Set((await Promise.all([...new Set(candidates)].map(toPhoneJid))).filter(Boolean));
+      // Include the publishing account as a status recipient for Baileys clients.
+      const ownJid = await toPhoneJid(sock?.user?.id || sock?.user?.jid);
+      if (ownJid) audience.delete(ownJid);
       const groupAudienceCount = audience.size;
       if (!groupAudienceCount) throw new Error("Groups ke valid phone-number participants nahi mile.");
 
-      // Include the publishing account as a status recipient for Baileys clients.
-      const ownJid = await toPhoneJid(sock?.user?.id || sock?.user?.jid);
-      if (ownJid) audience.add(ownJid);
+      const recipientList = [...audience];
+      const batchSize = 500;
+      const batches = [];
+      for (let i = 0; i < recipientList.length; i += batchSize) {
+        batches.push(recipientList.slice(i, i + batchSize));
+      }
+      totalBatches = batches.length;
 
-      const result = await sock.sendMessage("status@broadcast", {
-        text,
-      }, {
-        backgroundColor: "#7c5cff",
-        font: 3,
-        statusJidList: [...audience],
-        broadcast: true,
-      });
-      if (!result?.key?.id) throw new Error("WhatsApp status send confirm nahi hua.");
+      for (let i = 0; i < batches.length; i++) {
+        const batchAudience = new Set(batches[i]);
+        if (ownJid) batchAudience.add(ownJid);
+        const result = await sock.sendMessage("status@broadcast", { text }, {
+          backgroundColor: "#7c5cff",
+          font: 3,
+          statusJidList: [...batchAudience],
+          broadcast: true,
+        });
+        if (!result?.key?.id) throw new Error(`WhatsApp status batch ${i + 1}/${totalBatches} confirm nahi hua.`);
+        sentBatches++;
+        if (i < batches.length - 1) await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
 
       await sock.sendMessage(from, {
-        text: `✅ *gcsstatus request bhej di*\n\n📋 Groups: *${groupEntries.length}*\n👥 Group audience: *${groupAudienceCount}*\n📌 Apne account ke *Updates → My Status* me check karein.`,
+        text: `✅ *gcsstatus request bhej di*\n\n📋 Groups: *${groupEntries.length}*\n👥 Group audience: *${groupAudienceCount}*\n📤 Batches: *${sentBatches}*\n📌 Apne account ke *Updates → My Status* me check karein. Batches ki wajah se same Story alag entries me dikh sakti hai.`,
       });
     } catch (error) {
       log.error(`gcsstatus failed: ${error?.stack || error}`);
       await sock.sendMessage(from, {
-        text: `❌ *gcsstatus nahi chala:*\n${error?.message || "Unknown error"}`,
+        text: `${sentBatches ? `⚠️ *${sentBatches}/${totalBatches} status batches pehle hi bheje gaye.*\n` : ""}❌ *gcsstatus nahi chala:*\n${error?.message || "Unknown error"}`,
       }).catch(() => {});
     }
   },

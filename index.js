@@ -26,6 +26,8 @@ import {
   fetchLatestBaileysVersion,
   Browsers,
   downloadContentFromMessage,
+  generateWAMessageContent,
+  generateWAMessageFromContent,
 } from "@whiskeysockets/baileys";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1497,8 +1499,8 @@ register("statuspost", {
 register("gcsstatus", {
   toggle: null,
   run: async ({ sock, from, msg }) => {
-    let sentBatches = 0;
-    let totalBatches = 0;
+    let sentGroups = 0;
+    let totalGroups = 0;
     try {
       const quoted = getQuotedMessage(msg);
       const text = quoted?.conversation ?? quoted?.extendedTextMessage?.text ?? "";
@@ -1509,7 +1511,7 @@ register("gcsstatus", {
       }
 
       await sock.sendMessage(from, {
-        text: "⏳ *gcsstatus* chal raha hai… groups aur status audience check ho rahi hai.",
+        text: "⏳ *gcsstatus* chal raha hai… har group ki Story par post ho rahi hai.",
       });
 
       if (typeof sock.groupFetchAllParticipating !== "function") {
@@ -1517,73 +1519,35 @@ register("gcsstatus", {
       }
       const groupEntries = Object.entries(await sock.groupFetchAllParticipating() || {});
       if (!groupEntries.length) throw new Error("Bot kisi bhi group me nahi hai.");
-
-      const participantsByGroup = await Promise.all(groupEntries.map(async ([groupJid, group]) => {
-        if (Array.isArray(group?.participants) && group.participants.length) return group.participants;
-        try {
-          const metadata = await sock.groupMetadata(groupJid);
-          return metadata?.participants || [];
-        } catch (error) {
-          log.warn(`gcsstatus: group metadata failed for ${groupJid}: ${error?.message || error}`);
-          return [];
-        }
-      }));
-
-      const toPhoneJid = async (candidate) => {
-        if (!candidate) return null;
-        let jid = String(candidate).trim();
-        if (jid.endsWith("@lid")) jid = await resolveOriginalJid(sock, jid);
-        if (!jid) return null;
-        jid = String(jid);
-        if (jid.endsWith("@lid")) return null;
-        if (!jid.includes("@")) {
-          const number = jid.replace(/\D/g, "");
-          return number ? `${number}@s.whatsapp.net` : null;
-        }
-        if (!jid.endsWith("@s.whatsapp.net")) return null;
-        const number = cleanJid(jid);
-        return number ? `${number}@s.whatsapp.net` : null;
-      };
-
-      const candidates = participantsByGroup.flatMap((participants) => participants.flatMap((participant) => [
-        participant?.phoneNumber, participant?.jid, participant?.id, participant?.lid,
-      ]).filter(Boolean).map(String));
-      const audience = new Set((await Promise.all([...new Set(candidates)].map(toPhoneJid))).filter(Boolean));
-      // Include the publishing account as a status recipient for Baileys clients.
-      const ownJid = await toPhoneJid(sock?.user?.id || sock?.user?.jid);
-      if (ownJid) audience.delete(ownJid);
-      const groupAudienceCount = audience.size;
-      if (!groupAudienceCount) throw new Error("Groups ke valid phone-number participants nahi mile.");
-
-      const recipientList = [...audience];
-      const batchSize = 500;
-      const batches = [];
-      for (let i = 0; i < recipientList.length; i += batchSize) {
-        batches.push(recipientList.slice(i, i + batchSize));
+      if (typeof sock.relayMessage !== "function") {
+        throw new Error("Is Baileys connection me direct group-story relay available nahi hai.");
       }
-      totalBatches = batches.length;
+      if (typeof generateWAMessageContent !== "function" || typeof generateWAMessageFromContent !== "function") {
+        throw new Error("Installed Baileys me group-story message helpers available nahi hain.");
+      }
+      totalGroups = groupEntries.length;
 
-      for (let i = 0; i < batches.length; i++) {
-        const batchAudience = new Set(batches[i]);
-        if (ownJid) batchAudience.add(ownJid);
-        const result = await sock.sendMessage("status@broadcast", { text }, {
-          backgroundColor: "#7c5cff",
-          font: 3,
-          statusJidList: [...batchAudience],
-          broadcast: true,
-        });
-        if (!result?.key?.id) throw new Error(`WhatsApp status batch ${i + 1}/${totalBatches} confirm nahi hua.`);
-        sentBatches++;
-        if (i < batches.length - 1) await new Promise((resolve) => setTimeout(resolve, 1200));
+      for (let i = 0; i < groupEntries.length; i++) {
+        const [groupJid] = groupEntries[i];
+        const storyContent = await generateWAMessageContent({ text }, { jid: groupJid });
+        const generated = generateWAMessageFromContent(groupJid, {
+          groupStatusMessage: { message: storyContent },
+        }, { userJid: sock?.user?.id });
+        if (!generated?.message || !generated?.key?.id) {
+          throw new Error(`Group ${i + 1}/${totalGroups} ka story message generate nahi hua.`);
+        }
+        await sock.relayMessage(groupJid, generated.message, { messageId: generated.key.id });
+        sentGroups++;
+        if (i < groupEntries.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
       }
 
       await sock.sendMessage(from, {
-        text: `✅ *gcsstatus request bhej di*\n\n📋 Groups: *${groupEntries.length}*\n👥 Group audience: *${groupAudienceCount}*\n📤 Batches: *${sentBatches}*\n📌 Apne account ke *Updates → My Status* me check karein. Batches ki wajah se same Story alag entries me dikh sakti hai.`,
+        text: `✅ *gcsstatus group-story requests bhej di*\n\n📋 Groups: *${sentGroups}/${totalGroups}*\n📌 Yeh har group ke liye direct Group Story hai—individual status audience list nahi.`,
       });
     } catch (error) {
       log.error(`gcsstatus failed: ${error?.stack || error}`);
       await sock.sendMessage(from, {
-        text: `${sentBatches ? `⚠️ *${sentBatches}/${totalBatches} status batches pehle hi bheje gaye.*\n` : ""}❌ *gcsstatus nahi chala:*\n${error?.message || "Unknown error"}`,
+        text: `${sentGroups ? `⚠️ *${sentGroups}/${totalGroups} group stories pehle hi bheji gayi.*\n` : ""}❌ *gcsstatus nahi chala:*\n${error?.message || "Unknown error"}`,
       }).catch(() => {});
     }
   },

@@ -236,7 +236,7 @@ const antiWarningStyles = [
   (user, key) => `🚨 *FINAL WARNING (3/3)* 🚨\n👤 ${user} — *${key}* is still not allowed in this group.\n🚫 You are being removed now.`,
 ];
 const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
-  "song", "play", "song2", "video", "tagall", "tag", "movie",
+  "song", "play", "song2", "video", "tagall", "tag", "movie", "antidelete",
   "welcome", "goodbye", "setwelcome", "setgoodbye",
 ]);
 // These commands must be completely silent for everyone except the connected owner.
@@ -631,20 +631,26 @@ function wireHandlers(sessionId) {
         const sender = editedKey.participant || editedKey.remoteJid;
         await sock.sendMessage(botInbox, { text: `✏️ *ANTIEDIT REPORT*\n\n👤 User: ${displayUser(sender)}\n📌 Group: ${editedKey.remoteJid}\n\n↩️ Before:\n${beforeText}\n\n✍️ After:\n${afterText}` }).catch(() => {});
       }
+      // Only an explicit WhatsApp revoke is a deletion. Other message updates
+      // (receipts, reactions, status changes) often omit `update.message` too.
       const revoke = item.update?.message?.protocolMessage?.type === 0;
       const deletedKey = item.update?.message?.protocolMessage?.key || item.key;
-      const deletedChat = deletedKey?.remoteJid;
+      const deletedChat = deletedKey?.remoteJid || item.key?.remoteJid;
       const deletedId = deletedKey?.id;
-      if ((revoke || !item.update?.message) && deletedChat && deletedId && getToggles(sessionId).antidelete) {
-        const deleteToken = `${deletedChat}:${deletedId}`;
+      const antideleteEnabled = getToggles(sessionId).antidelete ||
+        (deletedChat?.endsWith("@g.us") && getToggles(deletedChat).antidelete);
+      if (revoke && deletedChat && deletedId && antideleteEnabled) {
+        // Message IDs are unique per WhatsApp session; claim the deletion
+        // synchronously so parallel/retried Baileys updates cannot report it twice.
+        const deleteToken = `${sessionId}:${deletedId}`;
         if (antideleteHandled.has(deleteToken)) continue;
+        antideleteHandled.add(deleteToken);
+        if (antideleteHandled.size > 10000) antideleteHandled.delete(antideleteHandled.values().next().value);
         let old = findCachedRecord(deletedKey);
         if (!old) {
           await new Promise((resolve) => setTimeout(resolve, 700));
           old = findCachedRecord(deletedKey);
         }
-        antideleteHandled.add(deleteToken);
-        if (antideleteHandled.size > 10000) antideleteHandled.delete(antideleteHandled.values().next().value);
         if (!old) {
           const fallbackSender = cleanJid(deletedKey.participantAlt || deletedKey.participant || deletedKey.remoteJidAlt || deletedKey.remoteJid);
           await sock.sendMessage(botInbox, { text: `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮\n┃ 🗑️ Deleted message detected\n┃ 📌 Source: ${deletedChat.endsWith("@g.us") ? "WhatsApp Group" : "Personal Inbox"}\n┃ 👤 Sender: ${fallbackSender ? `+${fallbackSender}` : "Unknown"}\n┃ ⚠️ Content unavailable in cache\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
@@ -954,11 +960,18 @@ async function handleMessage(sock, msg, sessionId) {
     if (OWNER_ONLY_SILENT_COMMANDS.has(normalizedCommand) && !isController(sock, from, msg, sessionId)) return;
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
-    // Group members must not be able to operate the bot. Only the connected
-    // owner may use commands in any group where this bot is present.
-    if (groupChat && normalizedCommand !== "gcsstatus" && !controller) return;
+    const publicGroupCommand = ["gcsstatus", "menu", "help"].includes(normalizedCommand);
+    const groupAdmin = groupChat && !publicGroupCommand
+      ? await isUserAdmin(sock, from, msg.key?.participant)
+      : false;
+    // Group commands are available to group admins (and the connected owner),
+    // while menu/help remain visible to everyone. This avoids granting control
+    // commands to ordinary members.
+    if (groupChat && !publicGroupCommand && !controller && !groupAdmin) return;
     const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
-    if (groupChat && normalizedCommand !== "gcsstatus" && !botAdmin && (!controller || !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand))) return;
+    const botAdminOptional = normalizedCommand === "antidelete" ||
+      (controller && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand));
+    if (groupChat && !publicGroupCommand && !botAdmin && !botAdminOptional) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -1362,7 +1375,7 @@ for (const name of ANTI_LIST) {
   register(name, {
     toggle: null,
     run: async ({ sock, from, args, sessionId }) => {
-      const scope = name === "antidelete" ? sessionId : (from.endsWith("@g.us") ? from : sessionId);
+      const scope = from.endsWith("@g.us") ? from : sessionId;
       if (!args[0]) {
         const t = getToggles(scope);
         return sock.sendMessage(from, {
@@ -2339,22 +2352,8 @@ register("menu", {
         serverMessageId: -1,
       },
     };
-    // Keep every command line intact; never split the menu in the middle of a word.
-    const safeParts = [];
-    let current = "";
-    for (const line of menuText.split("\n")) {
-      const next = current ? `${current}\n${line}` : line;
-      if (current && next.length > 3500) {
-        safeParts.push(current);
-        current = line;
-      } else {
-        current = next;
-      }
-    }
-    if (current) safeParts.push(current);
-    for (const part of safeParts) {
-      await sock.sendMessage(from, { text: part, contextInfo });
-    }
+    // Keep the complete categorized menu, including MORE COMMANDS, together.
+    await sock.sendMessage(from, { text: menuText, contextInfo });
   },
 });
 register("help", { toggle: null, run: async (p) => commands.get("menu").run(p) });

@@ -863,7 +863,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
   const antiKeys = ["antilink", "antiinvite", "antispam", "antiflood", "antiraid", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antiforward", "antiviewonce"];
   if (!antiKeys.some((key) => toggles[key])) return;
 
-  const sender = msg.key.participant || from;
+  const sender = msg.key.participantAlt || msg.key.participant || from;
   const message = unwrapMessage(msg.message);
   const text = message?.conversation || message?.extendedTextMessage?.text ||
     message?.imageMessage?.caption || message?.videoMessage?.caption || "";
@@ -900,7 +900,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
     ["antigif", () => !!msg.message?.videoMessage?.gifPlayback],
     ["antilocation", () => !!msg.message?.locationMessage],
     ["anticontact", () => !!msg.message?.contactMessage],
-    ["antipoll", () => !!msg.message?.pollCreationMessage],
+    ["antipoll", () => Object.keys(message || {}).some((key) => /^pollCreationMessage(?:V\d+)?$/.test(key) && !!message[key])],
     ["antiforward", () => !!msg.message?.extendedTextMessage?.contextInfo?.forwardingScore],
     ["antiviewonce", () => !!(msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2)],
   ];
@@ -920,10 +920,23 @@ async function takeAction(sock, group, user, msg, key) {
     antiWarningCounts.set(warningKey, warningNumber);
     await sock.sendMessage(group, { delete: msg.key }).catch(() => {});
     const shouldRemove = warningNumber >= 3;
-    const warningText = antiWarningStyles[warningNumber - 1](displayUser(user), key.toUpperCase());
+    const participants = groupMetadataCache.get(group)?.data?.participants || [];
+    const identity = await resolveUserIdentity(sock, [msg?.key?.participantAlt, user], participants, msg?.pushName);
+    const participant = participants.find((p) => [p.id, p.jid, p.phoneNumber].filter(Boolean)
+      .some((id) => cleanJid(id) && cleanJid(id) === cleanJid(identity.jid || user)));
+    const usableName = (value) => {
+      const candidate = String(value || "").replace(/\s+/g, " ").trim();
+      return candidate && !/^(unknown user|whatsapp contact|\+?\d+)$/i.test(candidate) ? candidate : "";
+    };
+    const name = [msg?.pushName, participant?.notify, participant?.name, participant?.verifiedName]
+      .map(usableName).find(Boolean) || "";
+    const hasDisplayName = !!name;
+    const mentionJid = identity.jid && !String(identity.jid).endsWith("@g.us") ? identity.jid : user;
+    const userLabel = hasDisplayName ? name : (cleanJid(mentionJid) && !String(mentionJid).endsWith("@g.us") ? `@${cleanJid(mentionJid)}` : "Group member");
+    const warningText = antiWarningStyles[warningNumber - 1](userLabel, key.toUpperCase());
     await sock.sendMessage(group, {
       text: warningText,
-      mentions: [user],
+      mentions: hasDisplayName || !cleanJid(mentionJid) || String(mentionJid).endsWith("@g.us") ? [] : [mentionJid],
     });
     if (shouldRemove || (key === "antilink" && antilinkActionState.get(group) === "kick")) {
       await sock.groupParticipantsUpdate(group, [user], "remove").catch(() => {});
@@ -1055,24 +1068,9 @@ async function handleMessage(sock, msg, sessionId) {
           if (other.length) grouped.push(["📦 MORE COMMANDS", other]);
           const body = grouped.filter(([, list]) => list.length).map(([title, list]) => `╭─❰ *${title}* ❱\n${list.sort().map((name) => `│ ▸ ${config.prefix}${name}`).join("\n")}\n╰──────────────`).join("\n\n");
           const text = `╭━━━❰ *${config.botName}* ❱━━━╮\n┃ 🤖 Prefix: *${config.prefix}*\n┃ 📦 Commands: *${commands.size}*\n┃ 🟢 Status: *ONLINE*\n╰━━━━━━━━━━━━━━━━╯\n\n${body}\n\n> ⚡ Fast • Secure • Reliable`;
-          // Split only at line boundaries; arbitrary character slicing used to
-          // cut words such as `restrict`, leaving a second message starting `rict`.
-          const parts = [];
-          let currentPart = "";
-          for (const line of text.split("\n")) {
-            const candidate = currentPart ? `${currentPart}\n${line}` : line;
-            if (currentPart && candidate.length > 3500) {
-              parts.push(currentPart);
-              currentPart = line;
-            } else {
-              currentPart = candidate;
-            }
-          }
-          if (currentPart) parts.push(currentPart);
           const contextInfo = { forwardingScore: 999, isForwarded: true, forwardedNewsletterMessageInfo: { newsletterJid: config.channelJid, newsletterName: config.botName, serverMessageId: -1 } };
-          try { await targetSock.sendMessage(targetFrom, { text: parts[0], contextInfo }); }
-          catch { await targetSock.sendMessage(targetFrom, { text: parts[0] }); }
-          for (const part of parts.slice(1)) await targetSock.sendMessage(targetFrom, { text: part });
+          try { await targetSock.sendMessage(targetFrom, { text, contextInfo }); }
+          catch { await targetSock.sendMessage(targetFrom, { text }); }
         },
       };
     }

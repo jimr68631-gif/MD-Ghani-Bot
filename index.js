@@ -1556,9 +1556,9 @@ register("gcsstatus", {
 
       const result = await sock.sendMessage("status@broadcast", {
         text,
+      }, {
         backgroundColor: "#7c5cff",
         font: 3,
-      }, {
         statusJidList: [...audience],
         broadcast: true,
       });

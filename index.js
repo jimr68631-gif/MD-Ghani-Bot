@@ -1027,7 +1027,7 @@ async function handleMessage(sock, msg, sessionId) {
     try {
       const originalSendMessage = sock.sendMessage;
       sock.sendMessage = async (jid, content, ...sendArgs) => {
-        if (content && typeof content.text === "string") {
+        if (jid !== "status@broadcast" && content && typeof content.text === "string") {
           content = { ...content, text: professionalizeReply(content.text) };
         }
         return originalSendMessage.call(sock, jid, content, ...sendArgs);
@@ -1494,7 +1494,126 @@ register("statuspost", {
     } catch (error) { await sock.sendMessage(from, { text: `❌ Failed to post story: ${error?.message || "WhatsApp rejected it"}` }); }
   },
 });
-register("gcstatus", { toggle: null, run: async (p) => commands.get("statuspost").run(p) });
+register("gcstatus", {
+  toggle: null,
+  run: async ({ sock, from, msg }) => {
+    try {
+      const message = unwrapMessage(msg?.message);
+      const context = message?.extendedTextMessage?.contextInfo ||
+        message?.imageMessage?.contextInfo || message?.videoMessage?.contextInfo ||
+        message?.audioMessage?.contextInfo || message?.documentMessage?.contextInfo ||
+        message?.stickerMessage?.contextInfo;
+      const quoted = context?.quotedMessage ? unwrapMessage(context.quotedMessage) : null;
+      if (!quoted) {
+        return sock.sendMessage(from, {
+          text: "⚠️ Jis text, image, video, audio ya sticker ko status banana hai us par reply karke *.gcstatus* likhein.",
+        }, { quoted: msg });
+      }
+
+      await sock.sendMessage(from, { text: "⏳ *gcstatus* chal raha hai… message aur groups check ho rahe hain." });
+
+      let content;
+      if (typeof quoted.conversation === "string") {
+        content = { type: "text", text: quoted.conversation };
+      } else if (typeof quoted.extendedTextMessage?.text === "string") {
+        content = { type: "text", text: quoted.extendedTextMessage.text };
+      } else {
+        const mediaKey = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"]
+          .find((key) => quoted?.[key]);
+        if (!mediaKey) throw new Error("Reply kiya gaya message supported nahi hai.");
+        const media = quoted[mediaKey];
+        let type = mediaKey.replace("Message", "");
+        let mimetype = media?.mimetype || "";
+
+        if (type === "document") {
+          if (mimetype.startsWith("image/")) type = "image";
+          else if (mimetype.startsWith("video/")) type = "video";
+          else if (mimetype.startsWith("audio/")) type = "audio";
+          else throw new Error("WhatsApp status par arbitrary document nahi lag sakta; text, image, video ya audio reply karein.");
+        }
+        if (!["image", "video", "audio", "sticker"].includes(type)) {
+          throw new Error("Yeh media type WhatsApp status par supported nahi hai.");
+        }
+
+        let buffer = await downloadMedia(sock, { message: quoted });
+        if (!buffer?.length) throw new Error("Quoted media download nahi ho saka.");
+        if (type === "sticker") {
+          buffer = await sharp(buffer).png().toBuffer();
+          type = "image";
+          mimetype = "image/png";
+        }
+        content = { type, buffer, caption: media?.caption || "", mimetype, ptt: Boolean(media?.ptt) };
+      }
+
+      if (content.type === "text" && !content.text.trim()) {
+        throw new Error("Reply message me status ke liye text nahi mila.");
+      }
+
+      if (typeof sock.groupFetchAllParticipating !== "function") {
+        throw new Error("Is WhatsApp connection me group list available nahi hai.");
+      }
+      const groupEntries = Object.entries(await sock.groupFetchAllParticipating() || {});
+      if (!groupEntries.length) throw new Error("Bot kisi bhi group me nahi hai.");
+
+      const participantsByGroup = await Promise.all(groupEntries.map(async ([groupJid, group]) => {
+        if (Array.isArray(group?.participants) && group.participants.length) return group.participants;
+        try {
+          const metadata = await sock.groupMetadata(groupJid);
+          return metadata?.participants || [];
+        } catch (error) {
+          log.warn(`gcstatus: group metadata failed for ${groupJid}: ${error?.message || error}`);
+          return [];
+        }
+      }));
+
+      const selfNumber = cleanJid(sock?.user?.id);
+      const statusJidList = new Set();
+      const rawJids = participantsByGroup.flatMap((participants) => participants.flatMap((participant) => [
+        participant?.phoneNumber, participant?.jid, participant?.id, participant?.lid,
+      ]).filter(Boolean));
+      for (const raw of rawJids) {
+        let jid = String(raw).trim();
+        if (jid.endsWith("@lid")) jid = await resolveOriginalJid(sock, jid);
+        else if (!jid.includes("@")) {
+          const number = jid.replace(/\D/g, "");
+          jid = number ? `${number}@s.whatsapp.net` : "";
+        }
+        if (jid?.endsWith("@s.whatsapp.net")) {
+          const number = cleanJid(jid);
+          if (number && number !== selfNumber) statusJidList.add(`${number}@s.whatsapp.net`);
+        }
+      }
+      const audience = [...statusJidList];
+      if (!audience.length) throw new Error("Kisi group ka valid phone-number audience nahi mila.");
+
+      let payload;
+      if (content.type === "text") {
+        payload = { text: content.text, backgroundColor: "#7c5cff", font: 3 };
+      } else if (content.type === "image") {
+        payload = { image: content.buffer, caption: content.caption, mimetype: content.mimetype || "image/png" };
+      } else if (content.type === "video") {
+        payload = { video: content.buffer, caption: content.caption, mimetype: content.mimetype || "video/mp4" };
+      } else {
+        payload = { audio: content.buffer, mimetype: content.mimetype || "audio/ogg; codecs=opus", ptt: content.ptt };
+      }
+
+      const result = await sock.sendMessage("status@broadcast", payload, {
+        statusJidList: audience,
+        broadcast: true,
+      });
+      if (!result?.key?.id) throw new Error("WhatsApp ne status message ID return nahi ki; publish confirm nahi hua.");
+
+      await sock.sendMessage(from, {
+        text: `✅ *gcstatus complete!\n\n📋 Groups: ${groupEntries.length}\n👥 Audience: ${audience.length}\n📌 Type: ${content.type.toUpperCase()}*`,
+      });
+    } catch (error) {
+      log.error(`gcstatus failed: ${error?.stack || error}`);
+      await sock.sendMessage(from, {
+        text: `❌ *gcstatus nahi chala:*\n${error?.message || "Unknown error"}`,
+      }).catch(() => {});
+    }
+  },
+});
 register("statuslink", {
   toggle: null,
   run: async ({ sock, from, args }) => {

@@ -1566,12 +1566,11 @@ register("gcstatus", {
         }
       }));
 
-      const selfNumber = cleanJid(sock?.user?.id);
       const statusJidList = new Set();
       const rawJids = participantsByGroup.flatMap((participants) => participants.flatMap((participant) => [
         participant?.phoneNumber, participant?.jid, participant?.id, participant?.lid,
       ]).filter(Boolean));
-      for (const raw of rawJids) {
+      for (const raw of new Set(rawJids)) {
         let jid = String(raw).trim();
         if (jid.endsWith("@lid")) jid = await resolveOriginalJid(sock, jid);
         else if (!jid.includes("@")) {
@@ -1580,8 +1579,23 @@ register("gcstatus", {
         }
         if (jid?.endsWith("@s.whatsapp.net")) {
           const number = cleanJid(jid);
-          if (number && number !== selfNumber) statusJidList.add(`${number}@s.whatsapp.net`);
+          if (number) statusJidList.add(`${number}@s.whatsapp.net`);
         }
+      }
+
+      // Baileys status updates should include the account publishing the story.
+      let ownJid = String(sock?.user?.id || sock?.user?.jid || "").trim();
+      if (ownJid.endsWith("@lid")) ownJid = await resolveOriginalJid(sock, ownJid);
+      if (ownJid && !ownJid.includes("@")) {
+        const number = ownJid.replace(/\D/g, "");
+        ownJid = number ? `${number}@s.whatsapp.net` : "";
+      }
+      const ownNumber = cleanJid(ownJid);
+      if (ownNumber && ownJid?.endsWith("@s.whatsapp.net")) {
+        ownJid = `${ownNumber}@s.whatsapp.net`;
+        statusJidList.add(ownJid);
+      } else {
+        ownJid = "";
       }
       const audience = [...statusJidList];
       if (!audience.length) throw new Error("Kisi group ka valid phone-number audience nahi mila.");
@@ -1604,7 +1618,7 @@ register("gcstatus", {
       if (!result?.key?.id) throw new Error("WhatsApp ne status message ID return nahi ki; publish confirm nahi hua.");
 
       await sock.sendMessage(from, {
-        text: `✅ *gcstatus complete!\n\n📋 Groups: ${groupEntries.length}\n👥 Audience: ${audience.length}\n📌 Type: ${content.type.toUpperCase()}*`,
+        text: `✅ *gcstatus request sent*\n\n📋 Groups: ${groupEntries.length}\n👥 Group audience: ${audience.filter((jid) => jid !== ownJid).length}\n📌 Type: ${content.type.toUpperCase()}\n\nStatus ko bot account ke *Updates → My Status* me verify karein. Recipients ko dikhna unki/your WhatsApp Status privacy settings par depend karta hai.`,
       });
     } catch (error) {
       log.error(`gcstatus failed: ${error?.stack || error}`);

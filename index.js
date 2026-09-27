@@ -239,6 +239,22 @@ const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag", "movie", "antidelete",
   "welcome", "goodbye", "setwelcome", "setgoodbye",
 ]);
+const GROUP_ADMIN_COMMANDS = new Set([
+  "add", "kick", "promote", "demote", "kickall", "kickoffline", "leave",
+  "tagall", "mention", "hidetag", "open", "close", "restrict", "unrestrict",
+  "lock", "unlock", "announcement", "unannouncement", "setrules", "reject",
+  "rejectall", "revoke", "clearwarnings", "delgrouppp", "setgrouppp", "setname",
+  "setdesc", "warn", "setwelcome", "setgoodbye", "setautoreply", "welcome", "goodbye",
+  "groupdesc", "resetmember", "lockdown", "slowmode", "keywordreply", "groupbackup",
+  "restoregroup", "maintenance", "antical", "antispamlink", "welcomeedit", "autostatuslinkkick",
+  "antilink", "set", "autoseen", "autotyping", "autorecording", "autoreact",
+  "autoviewstatus", "autoreactstatus", "autosavestatus", "autoreacttyping",
+  "autorecordtyping", "autoreply", "antibadword", "antibot", "antibug", "anticontact",
+  "antidelete", "antidemote", "antipromote", "antidocument", "antiedit", "antiforward",
+  "antigif", "antiimage", "antilocation", "antimessage", "antipoll", "antistatus",
+  "antisticker", "antitag", "antitagadmin", "antivideo", "antivoice", "antistatuslinkkick",
+  "antispam", "antiflood", "antiraid", "antiinvite",
+]);
 // These commands must be completely silent for everyone except the connected owner.
 const OWNER_ONLY_SILENT_COMMANDS = new Set([
   "song", "song2", "play", "video", "tag", "tagall",
@@ -576,6 +592,19 @@ function wireHandlers(sessionId) {
     const toggles = getToggles(sessionId);
     for (const msg of messages) {
       if (!msg.message) continue;
+      const protocol = msg.message?.protocolMessage;
+      const protocolType = protocol?.type;
+      if (protocolType === 0 || String(protocolType).toUpperCase() === "REVOKE") {
+        // Baileys delivers message deletions as a REVOKE protocol message in
+        // messages.upsert, not reliably through messages.update.
+        sock.ev.emit("messages.update", [{
+          key: msg.key,
+          update: { message: { protocolMessage: { ...protocol, type: 0 } } },
+          participant: msg.participant,
+          pushName: msg.pushName,
+        }]);
+        continue;
+      }
       cacheMessage(deletedMessageCache, msg);
       cacheMessage(messageRetryCache, msg);
       if (deletedMessageCache.size > 1000) deletedMessageCache.delete(deletedMessageCache.keys().next().value);
@@ -633,7 +662,8 @@ function wireHandlers(sessionId) {
       }
       // Only an explicit WhatsApp revoke is a deletion. Other message updates
       // (receipts, reactions, status changes) often omit `update.message` too.
-      const revoke = item.update?.message?.protocolMessage?.type === 0;
+      const revokeType = item.update?.message?.protocolMessage?.type;
+      const revoke = revokeType === 0 || String(revokeType).toUpperCase() === "REVOKE";
       const deletedKey = item.update?.message?.protocolMessage?.key || item.key;
       const deletedChat = deletedKey?.remoteJid || item.key?.remoteJid;
       const deletedId = deletedKey?.id;
@@ -893,8 +923,25 @@ async function isUserAdmin(sock, group, user) {
     const cached = groupMetadataCache.get(group);
     const md = cached && cached.expires > Date.now() ? cached.data : await sock.groupMetadata(group);
     groupMetadataCache.set(group, { data: md, expires: Date.now() + 30000 });
-    const clean = String(user || "").split(":")[0];
-    const participant = md.participants.find((p) => p.id === user || p.jid === user || String(p.id).split(":")[0] === clean || String(p.jid || "").split(":")[0] === clean);
+    const candidates = Array.isArray(user) ? user : [user];
+    const knownJids = new Set();
+    const knownNumbers = new Set();
+    for (const candidate of candidates.filter(Boolean)) {
+      const values = [candidate, await resolveOriginalJid(sock, candidate)];
+      for (const value of values.filter(Boolean)) {
+        knownJids.add(String(value).split(":")[0].toLowerCase());
+        const number = cleanJid(value);
+        if (number) knownNumbers.add(number);
+      }
+    }
+    const participant = md.participants.find((p) => {
+      const ids = [p.id, p.jid, p.phoneNumber, p.lid, p.idAlt, p.phoneNumberAlt].filter(Boolean);
+      return ids.some((id) => {
+        const jid = String(id).split(":")[0].toLowerCase();
+        const number = cleanJid(id);
+        return knownJids.has(jid) || (number && knownNumbers.has(number));
+      });
+    });
     return !!(participant?.admin || participant?.isAdmin || participant?.role === "admin" || participant?.role === "superadmin");
   } catch { return false; }
 }
@@ -904,7 +951,8 @@ async function requireGroupAdmin(sock, from, msg, botMustBeAdmin = true) {
     await sock.sendMessage(from, { text: "❌ This command works only in groups." });
     return false;
   }
-  const sender = msg?.key?.participant || from;
+  const sender = [msg?.key?.participantAlt, msg?.key?.participant,
+    ...(msg?.key?.fromMe ? [sock.user?.id, sock.user?.lid] : [])].filter(Boolean);
   if (!(await isUserAdmin(sock, from, sender))) {
     await sock.sendMessage(from, { text: "❌ Only group admins can use this command." });
     return false;
@@ -923,10 +971,13 @@ async function isBotAdmin(sock, from) {
 function isController(sock, from, msg, sessionId) {
   // Messages sent by the connected WhatsApp account can carry a LID in
   // participant; fromMe is the reliable owner signal in that case.
-  const sender = msg?.key?.fromMe
-    ? (sock.user?.id || sock.user?.lid || from)
-    : (msg?.key?.participant || from);
-  const values = [sender].filter(Boolean).map((v) => String(v).split(":")[0].split("@")[0]);
+  const senders = msg?.key?.fromMe
+    ? [sock.user?.id, sock.user?.lid, from]
+    : [msg?.key?.participantAlt, msg?.key?.participant, from];
+  const values = senders.filter(Boolean).flatMap((v) => [
+    String(v).split(":")[0].split("@")[0],
+    cleanJid(v),
+  ]).filter(Boolean);
   const owners = config.owner.map((v) => String(v).split("@")[0]);
   const connected = String(sessionId).replace(/\D/g, "");
   return values.some((v) => owners.includes(v) || (connected && v === connected));
@@ -960,18 +1011,16 @@ async function handleMessage(sock, msg, sessionId) {
     if (OWNER_ONLY_SILENT_COMMANDS.has(normalizedCommand) && !isController(sock, from, msg, sessionId)) return;
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
-    const publicGroupCommand = ["gcsstatus", "menu", "help"].includes(normalizedCommand);
-    const groupAdmin = groupChat && !publicGroupCommand
-      ? await isUserAdmin(sock, from, msg.key?.participant)
+    const requiresGroupAdmin = GROUP_ADMIN_COMMANDS.has(normalizedCommand);
+    const groupAdmin = groupChat && requiresGroupAdmin
+      ? await isUserAdmin(sock, from, [msg.key?.participantAlt, msg.key?.participant,
+        ...(msg.key?.fromMe ? [sock.user?.id, sock.user?.lid] : [])])
       : false;
-    // Group commands are available to group admins (and the connected owner),
-    // while menu/help remain visible to everyone. This avoids granting control
-    // commands to ordinary members.
-    if (groupChat && !publicGroupCommand && !controller && !groupAdmin) return;
-    const botAdmin = groupChat ? await isBotAdmin(sock, from) : false;
+    if (groupChat && requiresGroupAdmin && !controller && !groupAdmin) return;
+    const botAdmin = groupChat && requiresGroupAdmin ? await isBotAdmin(sock, from) : false;
     const botAdminOptional = normalizedCommand === "antidelete" ||
       (controller && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand));
-    if (groupChat && !publicGroupCommand && !botAdmin && !botAdminOptional) return;
+    if (groupChat && requiresGroupAdmin && !botAdmin && !botAdminOptional) return;
     let cmd = commands.get(normalizedCommand);
     log.info(`📨 Command received: ${normalizedCommand} from ${from}`);
     if (!cmd && (normalizedCommand === "menu" || normalizedCommand === "help")) {
@@ -1030,7 +1079,7 @@ async function handleMessage(sock, msg, sessionId) {
     } else if (ownerCommand) {
       if (!isController(sock, from, msg, sessionId)) return;
       if (!(await requireBotAdminOnly(sock, from))) return;
-    } else if (normalizedCommand !== "menu" && normalizedCommand !== "help" && normalizedCommand !== "gcsstatus") {
+    } else if (requiresGroupAdmin) {
       const ownerSpecial = controller && !botAdmin && BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand);
       if (!ownerSpecial && !(await requireGroupAdmin(sock, from, msg, !BOT_ADMIN_OPTIONAL_COMMANDS.has(normalizedCommand)))) return;
     }

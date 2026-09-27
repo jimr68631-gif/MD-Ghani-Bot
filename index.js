@@ -28,6 +28,8 @@ import {
   downloadContentFromMessage,
   generateWAMessageContent,
   generateWAMessageFromContent,
+  jidNormalizedUser,
+  proto,
 } from "@whiskeysockets/baileys";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1525,14 +1527,32 @@ register("gcsstatus", {
       if (typeof generateWAMessageContent !== "function" || typeof generateWAMessageFromContent !== "function") {
         throw new Error("Installed Baileys me group-story message helpers available nahi hain.");
       }
+      const senderJid = jidNormalizedUser(sock?.user?.id || sock?.user?.jid || "");
+      if (!senderJid) throw new Error("Bot ka sender JID resolve nahi hua.");
       totalGroups = groupEntries.length;
 
       for (let i = 0; i < groupEntries.length; i++) {
         const [groupJid] = groupEntries[i];
         const storyContent = await generateWAMessageContent({ text }, { jid: groupJid });
+        if (!storyContent?.extendedTextMessage) {
+          throw new Error(`Group ${i + 1}/${totalGroups} ke liye text-story content nahi bana.`);
+        }
+        storyContent.extendedTextMessage.font = 1;
+        storyContent.extendedTextMessage.backgroundArgb = 0xff23313a;
+        storyContent.extendedTextMessage.contextInfo = {
+          ...(storyContent.extendedTextMessage.contextInfo || {}),
+          forwardingScore: 0,
+          featureEligibilities: { canBeReshared: true, canReceiveMultiReact: true },
+          pairedMediaType: 0,
+          isGroupStatus: true,
+          statusAttributions: [{
+            type: proto.StatusAttribution.Type.GROUP_STATUS,
+            groupStatus: { authorJid: senderJid },
+          }],
+        };
         const generated = generateWAMessageFromContent(groupJid, {
-          groupStatusMessage: { message: storyContent },
-        }, { userJid: sock?.user?.id });
+          groupStatusMessageV2: { message: storyContent },
+        }, { userJid: senderJid });
         if (!generated?.message || !generated?.key?.id) {
           throw new Error(`Group ${i + 1}/${totalGroups} ka story message generate nahi hua.`);
         }
@@ -1542,7 +1562,7 @@ register("gcsstatus", {
       }
 
       await sock.sendMessage(from, {
-        text: `✅ *gcsstatus group-story requests bhej di*\n\n📋 Groups: *${sentGroups}/${totalGroups}*\n📌 Yeh har group ke liye direct Group Story hai—individual status audience list nahi.`,
+        text: `✅ *gcsstatus Group Stories post kar di*\n\n📋 Groups: *${sentGroups}/${totalGroups}*\n📌 Har group ki apni Story par post hua; individual status audience list use nahi hui.`,
       });
     } catch (error) {
       log.error(`gcsstatus failed: ${error?.stack || error}`);

@@ -119,11 +119,42 @@ function displayUser(jid, participant = null) {
 function reportIdentity(identity) {
   const rawName = String(identity?.name || "").replace(/\s+/g, " ").trim();
   const name = /^(unknown user|whatsapp contact|\+?\d+)$/i.test(rawName) ? "" : rawName;
-  if (name) return name;
   const jid = String(identity?.jid || "");
-  if (!jid || jid.endsWith("@lid") || jid.endsWith("@g.us")) return "Unknown sender";
-  const number = cleanJid(jid);
-  return number ? `@${number}` : "Unknown sender";
+  const number = jid && !jid.endsWith("@lid") && !jid.endsWith("@g.us") ? cleanJid(jid) : "";
+  const numberLabel = number ? `+${number}` : "";
+  return name ? `${name}${numberLabel ? ` (${numberLabel})` : ""}` : (numberLabel || "Unknown sender");
+}
+async function resolveAntideleteIdentity(sock, candidates, participants = [], fallbackName = "") {
+  const raw = [...new Set((Array.isArray(candidates) ? candidates : [candidates]).filter(Boolean))];
+  const resolved = await Promise.all(raw.map((jid) => resolveOriginalJid(sock, jid)));
+  const all = [...new Set([...raw, ...resolved].filter(Boolean))];
+  const normalized = new Set(all.map((jid) => String(jid).split(":")[0].toLowerCase()));
+  const numbers = new Set(all.map(cleanJid).filter(Boolean));
+  const participant = (participants || []).find((entry) => {
+    const aliases = [entry?.id, entry?.jid, entry?.phoneNumber, entry?.lid, entry?.idAlt, entry?.phoneNumberAlt].filter(Boolean);
+    return aliases.some((alias) => {
+      const value = String(alias).split(":")[0].toLowerCase();
+      return normalized.has(value) || (!value.endsWith("@lid") && !value.endsWith("@g.us") && numbers.has(cleanJid(value)));
+    });
+  });
+  const identity = await resolveUserIdentity(sock, all, participants, fallbackName);
+  const phoneCandidates = [participant?.phoneNumber, participant?.phoneNumberAlt, participant?.idAlt, ...all];
+  for (const candidate of phoneCandidates.filter(Boolean)) {
+    const value = await resolveOriginalJid(sock, candidate);
+    if (!value || String(value).endsWith("@lid") || String(value).endsWith("@g.us")) continue;
+    const phoneJid = String(value).includes("@") ? value : `${cleanJid(value)}@s.whatsapp.net`;
+    if (cleanJid(phoneJid)) {
+      identity.jid = phoneJid;
+      break;
+    }
+  }
+  const usableName = (value) => {
+    const name = String(value || "").replace(/\s+/g, " ").trim();
+    return name && !/^(unknown user|whatsapp contact|\+?\d+)$/i.test(name) ? name : "";
+  };
+  identity.name = usableName(fallbackName) || usableName(participant?.notify) ||
+    usableName(participant?.name) || usableName(participant?.verifiedName) || usableName(identity.name);
+  return identity;
 }
 
 /* ============================================================
@@ -717,31 +748,35 @@ function wireHandlers(sessionId) {
             : (isGroup
               ? [deletedKey.participantAlt, deletedKey.participant]
               : [deletedKey.remoteJidAlt, deletedKey.remoteJid]);
-          const revokerCandidates = [item.key?.participantAlt, item.key?.participant, item.key?.remoteJidAlt, item.key?.remoteJid].filter(Boolean);
+          const deletedByCandidates = isGroup
+            ? [item.key?.participantAlt, item.key?.participant, item.participantAlt, item.participant].filter(Boolean)
+            : (item.key?.fromMe ? [sock.user?.id, sock.user?.lid].filter(Boolean) : [item.key?.remoteJidAlt, item.key?.remoteJid].filter(Boolean));
           const senderIds = senderCandidates.map(cleanJid).filter(Boolean);
-          const revokerIds = revokerCandidates.map(cleanJid).filter(Boolean);
-          const sameSenderDeletedIt = senderIds.some((id) => revokerIds.includes(id));
-          const fallbackIdentity = await resolveUserIdentity(
-            sock, senderCandidates, participants, sameSenderDeletedIt ? item.pushName : "",
-          );
-          const senderLabel = deletedKey.fromMe ? "You (bot account)" : reportIdentity(fallbackIdentity);
+          const deletedByIds = deletedByCandidates.map(cleanJid).filter(Boolean);
+          const sameSenderDeletedIt = senderIds.some((id) => deletedByIds.includes(id));
+          const fallbackIdentity = await resolveAntideleteIdentity(sock, senderCandidates, participants, sameSenderDeletedIt ? item.pushName : "");
+          const fallbackDeletedByIdentity = await resolveAntideleteIdentity(sock, deletedByCandidates, participants, item.pushName);
+          const botAccountLabel = reportIdentity({ jid: sock.user?.id || sock.user?.lid, name: "Bot account" });
+          const senderLabel = deletedKey.fromMe ? botAccountLabel : reportIdentity(fallbackIdentity);
+          const deletedByLabel = item.key?.fromMe ? botAccountLabel : reportIdentity(fallbackDeletedByIdentity);
           const sourceName = groupData?.subject || (isGroup ? "WhatsApp Group" : "Personal Inbox");
           const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
-          const mentions = senderLabel.startsWith("@") && fallbackIdentity.jid && !String(fallbackIdentity.jid).endsWith("@lid")
-            ? [fallbackIdentity.jid]
-            : [];
           const report = `╭━━━❰ *ANTIDELETE* ❱━━━╮
 ┃ 🗑️ Deleted message
 ┃ 📍 Chat: ${sourceName}
 ┃ 👤 Sender: ${senderLabel}
+┃ 🗑️ Deleted by: ${deletedByLabel}
 ┃ 🕒 ${deletedAt}
 ╰━━━━━━━━━━━━━━━━━━━━╯
 ℹ️ Content wasn't cached before deletion (for example, the bot was offline), so it can't be recovered.`;
-          await sock.sendMessage(botInbox, { text: report, mentions }).catch(() => {});
+          await sock.sendMessage(botInbox, { text: report }).catch(() => {});
           continue;
         }
-        const oldMessage = unwrapMessage(old?.message || old);
         const oldKey = old?.key || old?.message?.key;
+        const antideletePayload = unwrapAntideletePayload(old?.message || old);
+        const oldMessage = antideletePayload.message;
+        const isViewOnce = antideletePayload.isViewOnce || !!oldKey?.isViewOnce;
+        const isStatusMention = antideletePayload.isStatusMention;
         if (!oldMessage || (oldKey?.fromMe && oldKey?.remoteJid === botInbox)) continue;
         const source = deletedChat;
         const isGroup = source.endsWith("@g.us");
@@ -755,40 +790,54 @@ function wireHandlers(sessionId) {
           } catch {}
         }
         const participants = cachedGroup?.data?.participants || [];
-        const senderIdentity = await resolveUserIdentity(
+        const botAccountLabel = reportIdentity({ jid: sock.user?.id || sock.user?.lid, name: "Bot account" });
+        const senderIdentity = await resolveAntideleteIdentity(
           sock,
-          isGroup
-            ? [oldKey?.participantAlt, oldKey?.participant]
-            : [oldKey?.participantAlt, oldKey?.participant, oldKey?.remoteJidAlt, oldKey?.remoteJid],
+          oldKey?.fromMe
+            ? [sock.user?.id, sock.user?.lid].filter(Boolean)
+            : (isGroup
+              ? [oldKey?.participantAlt, oldKey?.participant]
+              : [oldKey?.participantAlt, oldKey?.participant, oldKey?.remoteJidAlt, oldKey?.remoteJid]),
           participants,
           old.pushName,
         );
-        const deletedByIdentity = await resolveUserIdentity(
+        const deletedByCandidates = isGroup
+          ? [item.key?.participantAlt, item.key?.participant, item.participantAlt, item.participant].filter(Boolean)
+          : (item.key?.fromMe ? [sock.user?.id, sock.user?.lid].filter(Boolean) : [item.key?.remoteJidAlt, item.key?.remoteJid].filter(Boolean));
+        const deletedByIdentity = await resolveAntideleteIdentity(
           sock,
-          isGroup
-            ? [item.key?.participantAlt, item.key?.participant, item.update?.message?.protocolMessage?.key?.participant]
-            : [item.key?.participantAlt, item.key?.participant, item.key?.remoteJidAlt, item.key?.remoteJid],
+          deletedByCandidates,
           participants,
           item.pushName,
         );
         const originalSender = senderIdentity.jid;
         const deletedBy = deletedByIdentity.jid;
-        const senderLabel = reportIdentity(senderIdentity);
-        const deletedByLabel = reportIdentity(deletedByIdentity);
+        const senderLabel = oldKey?.fromMe ? botAccountLabel : reportIdentity(senderIdentity);
+        const deletedByLabel = item.key?.fromMe ? botAccountLabel : reportIdentity(deletedByIdentity);
         const sourceName = cachedGroup?.expires > Date.now() && cachedGroup.data?.subject
           ? cachedGroup.data.subject
           : (isChannel ? "WhatsApp Channel/Status" : (isGroup ? "WhatsApp Group" : "Personal Inbox"));
-        const type = source === "status@broadcast" || source.endsWith("@newsletter") ? "STATUS" :
+        const contentType = source === "status@broadcast" || source.endsWith("@newsletter") ? "STATUS" :
           oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ? "Text" :
           oldMessage?.imageMessage ? "Photo" : oldMessage?.videoMessage ? "Video" :
           oldMessage?.audioMessage ? "Voice/Audio" : oldMessage?.documentMessage ? "Document/File" :
           oldMessage?.stickerMessage ? "Sticker" : oldMessage?.contactMessage ? "Contact" :
           oldMessage?.locationMessage ? "Location" : oldMessage?.pollCreationMessage ? "Poll" : "Media/Other";
+        const type = isStatusMention
+          ? `Status mention${contentType !== "Media/Other" ? ` • ${contentType}` : ""}`
+          : (isViewOnce ? `View-once ${contentType === "Media/Other" ? "message" : contentType}` : contentType);
         const rawText = oldMessage?.conversation || oldMessage?.extendedTextMessage?.text ||
           oldMessage?.imageMessage?.caption || oldMessage?.videoMessage?.caption ||
           oldMessage?.documentMessage?.caption || oldMessage?.audioMessage?.caption || "";
         if (/ANTIDELETE REPORT|Message Deleted & Recovered|Source Chat:/i.test(rawText)) continue;
-        const text = rawText.replace(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi, "").trim() || "[No text content in this message]";
+        const linkPattern = /https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi;
+        const links = [...new Set(rawText.match(linkPattern) || [])];
+        const cleanText = rawText.replace(linkPattern, "").trim();
+        const fallbackContent = isStatusMention
+          ? "[Status mention; referenced content unavailable]"
+          : (isViewOnce ? "[View-once media]" : "[No text content in this message]");
+        const text = [cleanText || (links.length ? "" : fallbackContent), links.length ? `🔗 Link(s):\n${links.join("\n")}` : ""]
+          .filter(Boolean).join("\n\n");
         const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
         const report = `╭━━━❰ *ANTIDELETE • RECOVERED* ❱━━━╮
 ┃ 📦 ${type}  •  📍 ${sourceName}
@@ -803,7 +852,7 @@ ${text}`;
         await sock.sendMessage(botInbox, { text: report, mentions: [...new Set(reportMentions)] }).catch(() => {});
         const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: ${senderLabel}\n🗑️ Deleted by: ${deletedByLabel}`;
         try {
-          const fake = { key: oldKey, message: old?.message || oldMessage };
+          const fake = { key: oldKey, message: oldMessage };
           if (oldMessage?.imageMessage) {
             const media = await downloadMedia(sock, fake);
             await sock.sendMessage(botInbox, { image: media, caption: mediaCaption });
@@ -821,14 +870,11 @@ ${text}`;
             await sock.sendMessage(botInbox, { sticker: media });
           } else if (oldMessage?.conversation || oldMessage?.extendedTextMessage?.text || rawText) {
             // Text is already included in the concise report above; do not send a second nested report.
-          } else if (oldMessage?.contactMessage || oldMessage?.locationMessage || oldMessage?.pollCreationMessage) {
-            await sock.sendMessage(botInbox, { text: `📦 *Recovered ${type}*\n\n${JSON.stringify(oldMessage[`${type.charAt(0).toLowerCase()}${type.slice(1)}Message`] || oldMessage, null, 2)}\n\n${mediaCaption}` });
+          } else if (oldMessage?.contactMessage || oldMessage?.locationMessage || oldMessage?.pollCreationMessage || isStatusMention || isViewOnce) {
+            // Keep protocol wrappers out of the user-facing report; the summary above carries the readable type/content.
           } else {
             await sock.sendMessage(botInbox, { text: `📦 *Recovered Message*\n${mediaCaption}` });
           }
-          const linkText = rawText;
-          const links = linkText.match(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi);
-          if (links?.length) await sock.sendMessage(botInbox, { text: `🔗 *Recovered Link(s)*\n${links.join("\n")}\n\n${mediaCaption}` });
         } catch (mediaError) {
           log.warn(`antidelete media recovery failed: ${mediaError?.message || mediaError}`);
         }
@@ -1176,6 +1222,37 @@ function unwrapMessage(message) {
     current = next;
   }
   return current;
+}
+function unwrapAntideletePayload(message) {
+  let current = message?.message || message;
+  let isStatusMention = false;
+  let isViewOnce = false;
+  for (let i = 0; i < 8 && current; i++) {
+    if (current?.statusMentionMessage) {
+      isStatusMention = true;
+      if (current.statusMentionMessage.quotedStatus) {
+        current = current.statusMentionMessage.quotedStatus;
+        continue;
+      }
+      break;
+    }
+    let next = null;
+    if (current?.viewOnceMessage?.message) {
+      isViewOnce = true;
+      next = current.viewOnceMessage.message;
+    } else if (current?.viewOnceMessageV2?.message) {
+      isViewOnce = true;
+      next = current.viewOnceMessageV2.message;
+    } else if (current?.viewOnceMessageV2Extension?.message) {
+      isViewOnce = true;
+      next = current.viewOnceMessageV2Extension.message;
+    } else {
+      next = current?.ephemeralMessage?.message || current?.documentWithCaptionMessage?.message;
+    }
+    if (!next || next === current) break;
+    current = next;
+  }
+  return { message: unwrapMessage(current), isStatusMention, isViewOnce };
 }
 
 /* ============================================================

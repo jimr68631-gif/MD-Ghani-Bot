@@ -117,10 +117,13 @@ function displayUser(jid, participant = null) {
   return name && number ? `${name} (+${number})` : name || (number ? `+${number}` : "Unknown user");
 }
 function reportIdentity(identity) {
-  const number = cleanJid(identity?.jid);
-  const rawName = String(identity?.name || "").trim();
+  const rawName = String(identity?.name || "").replace(/\s+/g, " ").trim();
   const name = /^(unknown user|whatsapp contact|\+?\d+)$/i.test(rawName) ? "" : rawName;
-  return name && number ? `${name} (+${number})` : name || (number ? `+${number}` : "Unknown user");
+  if (name) return name;
+  const jid = String(identity?.jid || "");
+  if (!jid || jid.endsWith("@lid") || jid.endsWith("@g.us")) return "Unknown sender";
+  const number = cleanJid(jid);
+  return number ? `@${number}` : "Unknown sender";
 }
 
 /* ============================================================
@@ -696,8 +699,45 @@ function wireHandlers(sessionId) {
           old = findCachedRecord(deletedKey);
         }
         if (!old) {
-          const fallbackSender = cleanJid(deletedKey.participantAlt || deletedKey.participant || deletedKey.remoteJidAlt || deletedKey.remoteJid);
-          await sock.sendMessage(botInbox, { text: `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮\n┃ 🗑️ Deleted message detected\n┃ 📌 Source: ${deletedChat.endsWith("@g.us") ? "WhatsApp Group" : "Personal Inbox"}\n┃ 👤 Sender: ${fallbackSender ? `+${fallbackSender}` : "Unknown"}\n┃ ⚠️ Content unavailable in cache\n╰━━━━━━━━━━━━━━━━━━━━╯` }).catch(() => {});
+          const isGroup = deletedChat.endsWith("@g.us");
+          let groupData = null;
+          if (isGroup) {
+            const cached = groupMetadataCache.get(deletedChat);
+            if (cached?.expires > Date.now()) groupData = cached.data;
+            else {
+              try {
+                groupData = await sock.groupMetadata(deletedChat);
+                groupMetadataCache.set(deletedChat, { data: groupData, expires: Date.now() + 30000 });
+              } catch {}
+            }
+          }
+          const participants = groupData?.participants || [];
+          const senderCandidates = deletedKey.fromMe
+            ? [sock.user?.id, sock.user?.lid].filter(Boolean)
+            : (isGroup
+              ? [deletedKey.participantAlt, deletedKey.participant]
+              : [deletedKey.remoteJidAlt, deletedKey.remoteJid]);
+          const revokerCandidates = [item.key?.participantAlt, item.key?.participant, item.key?.remoteJidAlt, item.key?.remoteJid].filter(Boolean);
+          const senderIds = senderCandidates.map(cleanJid).filter(Boolean);
+          const revokerIds = revokerCandidates.map(cleanJid).filter(Boolean);
+          const sameSenderDeletedIt = senderIds.some((id) => revokerIds.includes(id));
+          const fallbackIdentity = await resolveUserIdentity(
+            sock, senderCandidates, participants, sameSenderDeletedIt ? item.pushName : "",
+          );
+          const senderLabel = deletedKey.fromMe ? "You (bot account)" : reportIdentity(fallbackIdentity);
+          const sourceName = groupData?.subject || (isGroup ? "WhatsApp Group" : "Personal Inbox");
+          const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
+          const mentions = senderLabel.startsWith("@") && fallbackIdentity.jid && !String(fallbackIdentity.jid).endsWith("@lid")
+            ? [fallbackIdentity.jid]
+            : [];
+          const report = `╭━━━❰ *ANTIDELETE* ❱━━━╮
+┃ 🗑️ Deleted message
+┃ 📍 Chat: ${sourceName}
+┃ 👤 Sender: ${senderLabel}
+┃ 🕒 ${deletedAt}
+╰━━━━━━━━━━━━━━━━━━━━╯
+ℹ️ Content wasn't cached before deletion (for example, the bot was offline), so it can't be recovered.`;
+          await sock.sendMessage(botInbox, { text: report, mentions }).catch(() => {});
           continue;
         }
         const oldMessage = unwrapMessage(old?.message || old);
@@ -750,15 +790,17 @@ function wireHandlers(sessionId) {
         if (/ANTIDELETE REPORT|Message Deleted & Recovered|Source Chat:/i.test(rawText)) continue;
         const text = rawText.replace(/https?:\/\/[^\s]+|wa\.me\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|t\.me\/[^\s]+/gi, "").trim() || "[No text content in this message]";
         const deletedAt = new Date().toLocaleString("en-GB", { timeZone: "Asia/Karachi" });
-        const report = `╭━━━❰ *ANTIDELETE REPORT* ❱━━━╮
-┃ 🗑️ Recovered: *${type}*
-┃ 📌 Source: ${sourceName}
-┃ 👤 Sent by: ${senderLabel}
+        const report = `╭━━━❰ *ANTIDELETE • RECOVERED* ❱━━━╮
+┃ 📦 ${type}  •  📍 ${sourceName}
+┃ 👤 From: ${senderLabel}
 ┃ 🗑️ Deleted by: ${deletedByLabel}
 ┃ 🕒 ${deletedAt}
 ╰━━━━━━━━━━━━━━━━━━━━╯
-💬 ${text}`;
-        await sock.sendMessage(botInbox, { text: report }).catch(() => {});
+${text}`;
+        const reportMentions = [senderIdentity, deletedByIdentity]
+          .filter((identity) => reportIdentity(identity).startsWith("@") && identity.jid && !String(identity.jid).endsWith("@lid"))
+          .map((identity) => identity.jid);
+        await sock.sendMessage(botInbox, { text: report, mentions: [...new Set(reportMentions)] }).catch(() => {});
         const mediaCaption = `📌 Source: ${sourceName}\n👤 Sent by: ${senderLabel}\n🗑️ Deleted by: ${deletedByLabel}`;
         try {
           const fake = { key: oldKey, message: old?.message || oldMessage };
@@ -1495,20 +1537,17 @@ register("botstatus", {
     if (!(await requireGroupAdmin(sock, from, msg, false))) return;
     const toggles = getToggles(from);
     const botIsAdmin = await isBotAdmin(sock, from);
-    const anti = ANTI_LIST.filter((name) => toggles[name]);
-    const enabled = [...commands.keys()].filter((name) => !ANTI_LIST.includes(name));
-    const status = botIsAdmin ? "🟢 ACTIVE" : "🔴 INACTIVE — Bot is not group admin";
+    const groupSettings = getGroupMessageSettings(from);
+    const active = [...new Set([...commands.keys()].filter((name) => toggles[name] === true))];
+    if (groupSettings.welcomeEnabled && commands.has("welcome")) active.push("welcome");
+    if (groupSettings.goodbyeEnabled && commands.has("goodbye")) active.push("goodbye");
+    active.sort();
     const text = `╭━━━❰ *BOT STATUS* ❱━━━╮
-┃ ${status}
-┃ 🛡️ Bot Admin: ${botIsAdmin ? "YES" : "NO"}
+┃ 🛡️ Bot admin: ${botIsAdmin ? "YES ✅" : "NO ⚠️"}
+┃ ⚙️ Active commands: *${active.length}*
 ╰━━━━━━━━━━━━━━━━━━━━╯
-
-⚔️ *Anti-Features Active (${anti.length})*
-${anti.length ? anti.sort().map((name) => `▸ ${config.prefix}${name}`).join("\n") : "▸ None active"}
-
-🧰 *Normal Commands Available (${enabled.length})*
-${enabled.length ? enabled.sort().map((name) => `▸ ${config.prefix}${name}`).join("\n") : "▸ None available"}`;
-    for (const part of (text.match(/[\s\S]{1,3500}/g) || [text])) await sock.sendMessage(from, { text: part });
+${active.length ? active.map((name) => `▸ ${config.prefix}${name}`).join("\n") : "No commands are currently enabled."}`;
+    await sock.sendMessage(from, { text });
   },
 });
 register("settings", {
@@ -1776,23 +1815,107 @@ async function legacyYouTube(input, kind) {
   if (!mediaUrl) throw new Error("Fallback media provider returned no file");
   return { mediaUrl, title: input };
 }
-mk("ytmp4", async ({ sock, from, args }) => {
-  if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
-  const input = args.join(" ");
+async function getYouTubeMediaDetails(input) {
+  const directUrl = ytdl.validateURL(input);
+  if (directUrl) {
+    try {
+      const info = await ytdl.getInfo(input);
+      const details = info.videoDetails || {};
+      return {
+        url: input,
+        title: details.title || "YouTube media",
+        author: details.author?.name || "",
+        seconds: Number(details.lengthSeconds) || 0,
+        thumbnail: details.thumbnails?.at(-1)?.url || details.thumbnails?.[0]?.url || "",
+      };
+    } catch {}
+    return { url: input, title: "YouTube media", author: "", seconds: 0, thumbnail: "" };
+  }
+  const result = await ytSearch(input);
+  const video = result.videos?.find((item) => item?.url) || null;
+  if (video) {
+    return {
+      url: video.url,
+      title: video.title || "YouTube media",
+      author: video.author?.name || "",
+      seconds: Number(video.seconds) || 0,
+      timestamp: video.timestamp || "",
+      thumbnail: video.thumbnail || "",
+    };
+  }
+  throw new Error("No matching YouTube media found");
+}
+function formatMediaDuration(media) {
+  const seconds = Math.floor(Number(media.seconds) || 0);
+  if (seconds > 0) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainder = seconds % 60;
+    return hours
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+      : `${minutes}:${String(remainder).padStart(2, "0")}`;
+  }
+  return media.timestamp || "Unknown";
+}
+function mediaFileName(title, extension) {
+  const safe = String(title || "media")
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+  return `${safe || "media"}.${extension}`;
+}
+async function sendYouTubeMedia(sock, from, input, kind) {
+  const details = await getYouTubeMediaDetails(input);
+  const title = String(details.title || "YouTube media").replace(/[\r\n]+/g, " ").trim().slice(0, 180);
+  const duration = formatMediaDuration(details);
+  const isAudio = kind === "audio";
+  const heading = isAudio ? "🎵 SONG FOUND" : "🎬 VIDEO FOUND";
+  const progress = isAudio ? "📂 Downloading audio..." : "📂 Downloading video...";
+  const card = `╭━━━❰ *${heading}* ❱━━━╮
+┃ 🎧 ${title}
+${details.author ? `┃ 👤 ${details.author}\n` : ""}┃ ⏱️ ${duration}
+┃ ${progress}
+╰━━━━━━━━━━━━━━━━━━━━╯`;
+  if (details.thumbnail) {
+    try { await sock.sendMessage(from, { image: { url: details.thumbnail }, caption: card }); }
+    catch { await sock.sendMessage(from, { text: card }); }
+  } else {
+    await sock.sendMessage(from, { text: card });
+  }
+
+  let media;
   try {
-    const media = await downloadWithYtDlp(input, "video");
-    await sock.sendMessage(from, { video: media.buffer, mimetype: media.mimetype, caption: `🎬 ${media.title}
-
-${mediaFooter()}` });
-  } catch (primary) {
-    try { const f = await legacyYouTube(input, "video"); await sock.sendMessage(from, { video: { url: f.mediaUrl }, caption: `🎬 ${f.title}
-
-${mediaFooter()}` }); }
+    media = await downloadWithYtDlp(details.url, kind);
+  } catch (primaryError) {
+    try { media = await legacyYouTube(details.url, kind); }
     catch (fallbackError) {
-      log.warn(`YouTube download failed: ${fallbackError?.message || fallbackError}`);
-      throw new Error("YouTube download failed. Please try again shortly.");
+      log.warn(`YouTube ${kind} download failed: ${fallbackError?.message || primaryError?.message || fallbackError}`);
+      await sock.sendMessage(from, { text: `❌ Couldn't download *${title}*. Please try again shortly.` }).catch(() => {});
+      return;
     }
   }
+
+  if (isAudio) {
+    const output = {
+      document: media.buffer || { url: media.mediaUrl },
+      mimetype: "audio/mpeg",
+      fileName: mediaFileName(title, "mp3"),
+      caption: `✅ *MP3 READY*\n🎵 ${title}\n⏱️ ${duration}`,
+    };
+    await sock.sendMessage(from, output);
+    return;
+  }
+  const videoCaption = `╭━━━❰ *VIDEO READY* ❱━━━╮\n┃ 🎬 ${title}\n┃ ⏱️ ${duration}\n┃ ✅ Format: MP4\n╰━━━━━━━━━━━━━━━━━━━━╯`;
+  await sock.sendMessage(from, {
+    video: media.buffer || { url: media.mediaUrl },
+    mimetype: "video/mp4",
+    caption: videoCaption,
+  });
+}
+mk("ytmp4", async ({ sock, from, args }) => {
+  if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
+  await sendYouTubeMedia(sock, from, args.join(" "), "video");
 });
 mk("ytmp3", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp3 <YouTube URL>" });
@@ -1813,18 +1936,7 @@ mk("ytmp3", async ({ sock, from, args }) => {
 mk("song", async ({ sock, from, args }) => {
   const q = args.join(" ");
   if (!q) return sock.sendMessage(from, { text: "Usage: .song <song name>" });
-  try {
-    const media = await downloadWithYtDlp(q, "audio");
-    await sock.sendMessage(from, { audio: media.buffer, mimetype: media.mimetype, ptt: false });
-    await sendMediaFooter(sock, from);
-  } catch {
-    try { const f = await legacyYouTube(q, "audio"); await sock.sendMessage(from, { audio: { url: f.mediaUrl }, mimetype: "audio/mpeg", ptt: false });
-      await sendMediaFooter(sock, from); }
-    catch (fallbackError) {
-      log.warn(`YouTube download failed: ${fallbackError?.message || fallbackError}`);
-      throw new Error("YouTube download failed. Please try again shortly.");
-    }
-  }
+  await sendYouTubeMedia(sock, from, q, "audio");
 });
 mk("song2", async (p) => commands.get("song").run(p));
 mk("play", async (p) => commands.get("song").run(p));

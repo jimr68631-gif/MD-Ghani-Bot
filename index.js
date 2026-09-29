@@ -1849,24 +1849,41 @@ async function downloadWithYtDlp(input, kind) {
   const ext = kind === "audio" ? "mp3" : "mp4";
   const base = path.join(os.tmpdir(), `md-ghani-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const output = `${base}.${ext}`;
+  const outputTemplate = `${base}.%(ext)s`;
   try {
     const format = kind === "audio"
       ? "ba[ext=m4a]/ba[ext=webm]/bestaudio/best"
       : "bv*[height<=480]+ba/b[height<=480]/bv*[height<=720]+ba/b[height<=720]/b";
     const binary = await getYtDlpBinary();
-    // YouTube currently serves playable formats reliably through web_safari.
-    // Older clients often return "video unavailable", which caused every
-    // song/play/video command to fall through to the failing legacy API.
-    const clients = ["web_safari", "web", "web_creator", "mweb", "android", "tv_embedded", "android_vr"];
+    // The Docker image installs yt-dlp's no-cookie PO-token provider. Use its
+    // recommended mweb client when present; keep the existing client fallback
+    // for deployments that run without the provider package.
+    const potProviderHome = process.env.YOUTUBE_POT_PROVIDER_SERVER_HOME ||
+      "/opt/bgutil-ytdlp-pot-provider/server";
+    const hasPotProvider = fs.existsSync(path.join(potProviderHome, "build", "main.js")) &&
+      fs.existsSync(path.join(potProviderHome, "node_modules"));
+    const clients = hasPotProvider
+      ? ["mweb"]
+      : ["web_safari", "web", "web_creator", "mweb", "android", "tv_embedded", "android_vr"];
     const cookieFile = process.env.YOUTUBE_COOKIES_FILE;
+    const proxyUrl = String(process.env.YOUTUBE_PROXY || "").trim();
+    // Keep proxy credentials out of yt-dlp's command-line arguments. The
+    // child yt-dlp process and the PO-token helper both inherit these vars.
+    const downloadEnv = proxyUrl ? {
+      ...process.env,
+      HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl,
+      http_proxy: proxyUrl, https_proxy: proxyUrl, all_proxy: proxyUrl,
+    } : process.env;
     let lastError;
     for (const client of clients) {
-      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "--merge-output-format", "mp4", "-f", format, "-o", output];
+      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "--merge-output-format", "mp4", "-f", format, "-o", outputTemplate];
+      if (hasPotProvider) args.push("--extractor-args", `youtubepot-bgutilscript:server_home=${potProviderHome}`);
       if (cookieFile && fs.existsSync(cookieFile)) args.push("--cookies", cookieFile);
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
+      else args.push("--remux-video", "mp4");
       args.push(url);
       try {
-        await execFileAsync(binary, args, { timeout: 150000, maxBuffer: 2 * 1024 * 1024 });
+        await execFileAsync(binary, args, { timeout: 150000, maxBuffer: 2 * 1024 * 1024, env: downloadEnv });
         lastError = null;
         break;
       } catch (error) {
@@ -1879,8 +1896,11 @@ async function downloadWithYtDlp(input, kind) {
     if (!buffer.length) throw new Error("Downloaded file is empty");
     return { buffer, title: input, mimetype: kind === "audio" ? "audio/mpeg" : "video/mp4" };
   } finally {
-    await fs.promises.rm(output, { force: true }).catch(() => {});
-    await fs.promises.rm(`${base}.part`, { force: true }).catch(() => {});
+    const prefix = `${path.basename(base)}.`;
+    const leftovers = await fs.promises.readdir(os.tmpdir()).catch(() => []);
+    await Promise.all(leftovers
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => fs.promises.rm(path.join(os.tmpdir(), name), { force: true }).catch(() => {})));
   }
 }
 async function legacyYouTube(input, kind) {
@@ -1967,8 +1987,14 @@ ${details.author ? `┃ 👤 ${details.author}\n` : ""}┃ ⏱️ ${duration}
   } catch (primaryError) {
     try { media = await legacyYouTube(details.url, kind); }
     catch (fallbackError) {
-      log.warn(`YouTube ${kind} download failed: ${fallbackError?.message || primaryError?.message || fallbackError}`);
-      await sock.sendMessage(from, { text: `❌ Couldn't download *${title}*. Please try again shortly.` }).catch(() => {});
+      const errorDetails = [primaryError?.stderr, primaryError?.message, fallbackError?.message]
+        .filter(Boolean).join(" ");
+      const blocked = /\b403\b|\b429\b|too many requests|forbidden|failed to extract any player response/i.test(errorDetails);
+      log.warn(`YouTube ${kind} download failed: ${blocked ? "HTTP 403/429 access block" : (fallbackError?.message || primaryError?.message || fallbackError)}`);
+      const message = blocked
+        ? `❌ YouTube is blocking this server's network. Set *YOUTUBE_PROXY* to an authorized, unblocked proxy in hosting to download without cookies.`
+        : `❌ Couldn't download *${title}*. Please try again shortly.`;
+      await sock.sendMessage(from, { text: message }).catch(() => {});
       return;
     }
   }

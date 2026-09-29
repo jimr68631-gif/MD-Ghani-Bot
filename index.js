@@ -1985,6 +1985,15 @@ ${details.author ? `┃ 👤 ${details.author}\n` : ""}┃ ⏱️ ${duration}
   try {
     media = await downloadWithYtDlp(details.url, kind);
   } catch (primaryError) {
+    const primaryDetails = [primaryError?.stderr, primaryError?.message].filter(Boolean).join(" ");
+    const primaryBlocked = /\b403\b|\b429\b|too many requests|forbidden|failed to extract any player response/i.test(primaryDetails);
+    if (primaryBlocked) {
+      log.warn(`YouTube ${kind} download failed: HTTP 403/429 access block`);
+      await sock.sendMessage(from, {
+        text: `❌ YouTube is blocking this server's network. Set *YOUTUBE_PROXY* to an authorized, unblocked proxy in hosting to download without cookies.`,
+      }).catch(() => {});
+      return;
+    }
     try { media = await legacyYouTube(details.url, kind); }
     catch (fallbackError) {
       const errorDetails = [primaryError?.stderr, primaryError?.message, fallbackError?.message]

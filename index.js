@@ -1962,6 +1962,9 @@ function mediaFileName(title, extension) {
     .slice(0, 100);
   return `${safe || "media"}.${extension}`;
 }
+function isYouTubeAccessBlocked(errorText) {
+  return /\b403\b|\b429\b|too many requests|forbidden|failed to extract any player response|sign in to confirm|confirm.{0,30}not a bot|not a bot|bot verification|captcha|unusual traffic/i.test(String(errorText || ""));
+}
 async function sendYouTubeMedia(sock, from, input, kind) {
   const details = await getYouTubeMediaDetails(input);
   const title = String(details.title || "YouTube media").replace(/[\r\n]+/g, " ").trim().slice(0, 180);
@@ -1974,21 +1977,15 @@ async function sendYouTubeMedia(sock, from, input, kind) {
 ${details.author ? `┃ 👤 ${details.author}\n` : ""}┃ ⏱️ ${duration}
 ┃ ${progress}
 ╰━━━━━━━━━━━━━━━━━━━━╯`;
-  if (details.thumbnail) {
-    try { await sock.sendMessage(from, { image: { url: details.thumbnail }, caption: card }); }
-    catch { await sock.sendMessage(from, { text: card }); }
-  } else {
-    await sock.sendMessage(from, { text: card });
-  }
+  await sock.sendMessage(from, { text: card });
 
   let media;
   try {
     media = await downloadWithYtDlp(details.url, kind);
   } catch (primaryError) {
     const primaryDetails = [primaryError?.stderr, primaryError?.message].filter(Boolean).join(" ");
-    const primaryBlocked = /\b403\b|\b429\b|too many requests|forbidden|failed to extract any player response/i.test(primaryDetails);
-    if (primaryBlocked) {
-      log.warn(`YouTube ${kind} download failed: HTTP 403/429 access block`);
+    if (isYouTubeAccessBlocked(primaryDetails)) {
+      log.warn(`YouTube ${kind} download failed: access or bot-verification block`);
       await sock.sendMessage(from, {
         text: `❌ YouTube is blocking this server's network. Set *YOUTUBE_PROXY* to an authorized, unblocked proxy in hosting to download without cookies.`,
       }).catch(() => {});
@@ -1998,8 +1995,8 @@ ${details.author ? `┃ 👤 ${details.author}\n` : ""}┃ ⏱️ ${duration}
     catch (fallbackError) {
       const errorDetails = [primaryError?.stderr, primaryError?.message, fallbackError?.message]
         .filter(Boolean).join(" ");
-      const blocked = /\b403\b|\b429\b|too many requests|forbidden|failed to extract any player response/i.test(errorDetails);
-      log.warn(`YouTube ${kind} download failed: ${blocked ? "HTTP 403/429 access block" : (fallbackError?.message || primaryError?.message || fallbackError)}`);
+      const blocked = isYouTubeAccessBlocked(errorDetails);
+      log.warn(`YouTube ${kind} download failed: ${blocked ? "access or bot-verification block" : (fallbackError?.message || primaryError?.message || fallbackError)}`);
       const message = blocked
         ? `❌ YouTube is blocking this server's network. Set *YOUTUBE_PROXY* to an authorized, unblocked proxy in hosting to download without cookies.`
         : `❌ Couldn't download *${title}*. Please try again shortly.`;

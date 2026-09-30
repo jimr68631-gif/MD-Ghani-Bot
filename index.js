@@ -379,7 +379,21 @@ const professionalizeReply = (text) => {
  *  4. COMMAND REGISTRY + SESSIONS
  * ============================================================ */
 const commands = new Map();
-const register = (name, opts) => commands.set(String(name).trim().toLowerCase(), opts);
+const protectedMediaCommands = new Set();
+const register = (name, opts) => {
+  const key = String(name).trim().toLowerCase();
+  if (protectedMediaCommands.has(key)) {
+    log.warn(`Ignored duplicate registration for protected media command: ${key}`);
+    return commands;
+  }
+  return commands.set(key, opts);
+};
+const registerProtectedMediaCommand = (name, opts) => {
+  const key = String(name).trim().toLowerCase();
+  commands.set(key, opts);
+  protectedMediaCommands.add(key);
+  return commands;
+};
 const sessions = new Map();
 let shuttingDown = false;
 const approvalJobs = new Map();
@@ -1259,6 +1273,7 @@ function unwrapAntideletePayload(message) {
  * 10. COMMANDS — GROUP
  * ============================================================ */
 const mk = (n, fn) => register(n, { toggle: null, run: fn });
+const mkProtectedMedia = (n, fn) => registerProtectedMediaCommand(n, { toggle: null, run: fn });
 function getTargetJid(msg, args = [], fallback = null) {
   const message = unwrapMessage(msg?.message);
   const ctx = message?.extendedTextMessage?.contextInfo ||
@@ -2014,7 +2029,7 @@ async function sendYouTubeMedia(sock, from, input, kind) {
     caption: videoCaption,
   });
 }
-mk("ytmp4", async ({ sock, from, args }) => {
+mkProtectedMedia("ytmp4", async ({ sock, from, args }) => {
   if (!args[0]) return sock.sendMessage(from, { text: "Usage: .ytmp4 <YouTube URL>" });
   await sendYouTubeMedia(sock, from, args.join(" "), "video");
 });
@@ -2034,14 +2049,14 @@ mk("ytmp3", async ({ sock, from, args }) => {
     }
   }
 });
-mk("song", async ({ sock, from, args }) => {
+mkProtectedMedia("song", async ({ sock, from, args }) => {
   const q = args.join(" ");
   if (!q) return sock.sendMessage(from, { text: "Usage: .song <song name>" });
   await sendYouTubeMedia(sock, from, q, "audio");
 });
-mk("song2", async (p) => commands.get("song").run(p));
-mk("play", async (p) => commands.get("song").run(p));
-mk("video", async (p) => commands.get("ytmp4").run(p));
+mkProtectedMedia("song2", async (p) => commands.get("song").run(p));
+mkProtectedMedia("play", async (p) => commands.get("song").run(p));
+mkProtectedMedia("video", async (p) => commands.get("ytmp4").run(p));
 mk("youtube", async (p) => commands.get("ytmp4").run(p));
 mk("yt", async (p) => commands.get("ytmp4").run(p));
 mk("audio", async (p) => commands.get("song").run(p));

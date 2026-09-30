@@ -1970,14 +1970,6 @@ async function sendYouTubeMedia(sock, from, input, kind) {
   const title = String(details.title || "YouTube media").replace(/[\r\n]+/g, " ").trim().slice(0, 180);
   const duration = formatMediaDuration(details);
   const isAudio = kind === "audio";
-  const heading = isAudio ? "🎵 SONG FOUND" : "🎬 VIDEO FOUND";
-  const progress = isAudio ? "📂 Downloading audio..." : "📂 Downloading video...";
-  const card = `╭━━━❰ *${heading}* ❱━━━╮
-┃ 🎧 ${title}
-${details.author ? `┃ 👤 ${details.author}\n` : ""}┃ ⏱️ ${duration}
-┃ ${progress}
-╰━━━━━━━━━━━━━━━━━━━━╯`;
-  await sock.sendMessage(from, { text: card });
 
   let media;
   try {

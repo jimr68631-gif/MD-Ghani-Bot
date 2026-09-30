@@ -1115,9 +1115,9 @@ async function runAnti(sock, msg, sessionId, toggles) {
     await takeAction(sock, from, sender, msg, "antistatuslinkkick", { kick: true });
     return;
   }
-  if (toggles.antibot && !isControllerSender &&
+  if (toggles.antibot && !isControllerSender && !isAdmin &&
       (String(text).trim().startsWith(config.prefix) || isBotMention(sock, mentionedJids, text))) {
-    await takeAction(sock, from, sender, msg, "antibot", { noKick: true });
+    await takeAction(sock, from, sender, msg, "antibot", { kick: true });
     return;
   }
   if (toggles.antitagadmin && mentionedJids.length) {
@@ -1205,9 +1205,11 @@ async function takeAction(sock, group, user, msg, key, options = {}) {
     };
     const name = [msg?.pushName, participant?.notify, participant?.name, participant?.verifiedName]
       .map(usableName).find(Boolean) || "";
-    const hasDisplayName = !!name;
     const mentionJid = identity.jid && !String(identity.jid).endsWith("@g.us") ? identity.jid : user;
-    const userLabel = hasDisplayName ? name : (cleanJid(mentionJid) && !String(mentionJid).endsWith("@g.us") ? `@${cleanJid(mentionJid)}` : "Group member");
+    const mentionNumber = cleanJid(mentionJid);
+    const userLabel = mentionNumber
+      ? `${name ? `${name} ` : ""}@${mentionNumber}`
+      : name || "Group member";
     const warningText = options.kick
       ? `🚨 *${key.toUpperCase()}* — ${userLabel}: message deleted and user removed immediately.`
       : options.noKick
@@ -1215,7 +1217,7 @@ async function takeAction(sock, group, user, msg, key, options = {}) {
         : antiWarningStyles[warningNumber - 1](userLabel, key.toUpperCase());
     await sock.sendMessage(group, {
       text: warningText,
-      mentions: hasDisplayName || !cleanJid(mentionJid) || String(mentionJid).endsWith("@g.us") ? [] : [mentionJid],
+      mentions: mentionNumber && !String(mentionJid).endsWith("@g.us") ? [mentionJid] : [],
     });
     if (shouldRemove || (key === "antilink" && antilinkActionState.get(group) === "kick")) {
       await sock.groupParticipantsUpdate(group, [user], "remove").catch(() => {});
@@ -2178,11 +2180,7 @@ async function sendYouTubeMedia(sock, from, input, kind) {
   } catch (primaryError) {
     const primaryDetails = [primaryError?.stderr, primaryError?.message].filter(Boolean).join(" ");
     if (isYouTubeAccessBlocked(primaryDetails)) {
-      log.warn(`YouTube ${kind} download failed: access or bot-verification block`);
-      await sock.sendMessage(from, {
-        text: `❌ YouTube is blocking this server's network. Set *YOUTUBE_PROXY* to an authorized, unblocked proxy in hosting to download without cookies.`,
-      }).catch(() => {});
-      return;
+      log.warn(`YouTube ${kind} primary download blocked; trying the configured legacy fallback`);
     }
     try { media = await legacyYouTube(details.url, kind); }
     catch (fallbackError) {

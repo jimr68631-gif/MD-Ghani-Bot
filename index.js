@@ -411,6 +411,41 @@ const messageRetryCache = new Map();
 const messageIdCache = new Map();
 const antideleteHandled = new Set();
 const processedUpsertMessages = new Set();
+const processedCommandMessages = new Map();
+const processedCommandCacheFile = path.resolve(config.sessionDir, ".processed-command-messages.jsonl");
+const PROCESSED_COMMAND_TTL_MS = 7 * 86400000;
+const PROCESSED_COMMAND_LIMIT = 5000;
+try {
+  if (fs.existsSync(processedCommandCacheFile)) {
+    const now = Date.now();
+    for (const line of fs.readFileSync(processedCommandCacheFile, "utf8").split(/\r?\n/)) {
+      try {
+        const record = JSON.parse(line);
+        if (record?.token && Number.isFinite(record.processedAt) && now - record.processedAt < PROCESSED_COMMAND_TTL_MS) {
+          processedCommandMessages.set(record.token, record.processedAt);
+        }
+      } catch {}
+    }
+    while (processedCommandMessages.size > PROCESSED_COMMAND_LIMIT) {
+      processedCommandMessages.delete(processedCommandMessages.keys().next().value);
+    }
+    if (fs.statSync(processedCommandCacheFile).size > 1024 * 1024) {
+      fs.writeFileSync(processedCommandCacheFile, [...processedCommandMessages]
+        .map(([token, processedAt]) => JSON.stringify({ token, processedAt })).join("\n"));
+    }
+  }
+} catch (error) { log.warn(`command dedupe cache load failed: ${error?.message || error}`); }
+function rememberProcessedCommand(token) {
+  const processedAt = Date.now();
+  processedCommandMessages.set(token, processedAt);
+  while (processedCommandMessages.size > PROCESSED_COMMAND_LIMIT) {
+    processedCommandMessages.delete(processedCommandMessages.keys().next().value);
+  }
+  try {
+    fs.mkdirSync(path.dirname(processedCommandCacheFile), { recursive: true });
+    fs.appendFileSync(processedCommandCacheFile, `${JSON.stringify({ token, processedAt })}\n`);
+  } catch (error) { log.warn(`command dedupe cache save failed: ${error?.message || error}`); }
+}
 const persistentMessageCache = new Map();
 const persistentMessageCacheFile = path.resolve(config.sessionDir, ".antidelete-message-cache.json");
 let persistentWriteTimer = null;
@@ -675,7 +710,13 @@ function wireHandlers(sessionId) {
       const messageToken = msg.key?.id ? `${sessionId}:${msg.key.remoteJid || ""}:${msg.key.id}` : null;
       if (messageToken) {
         if (processedUpsertMessages.has(messageToken)) continue;
+        const commandText = isPrefixedCommandMessage(msg);
+        if (commandText && processedCommandMessages.has(messageToken)) {
+          processedUpsertMessages.add(messageToken);
+          continue;
+        }
         processedUpsertMessages.add(messageToken);
+        if (commandText) rememberProcessedCommand(messageToken);
         if (processedUpsertMessages.size > 10000) {
           processedUpsertMessages.delete(processedUpsertMessages.values().next().value);
         }
@@ -1371,6 +1412,14 @@ function unwrapMessage(message) {
     current = next;
   }
   return current;
+}
+function isPrefixedCommandMessage(msg) {
+  const message = unwrapMessage(msg?.message);
+  const text = message?.conversation || message?.extendedTextMessage?.text ||
+    message?.imageMessage?.caption || message?.videoMessage?.caption ||
+    message?.documentMessage?.caption || message?.buttonsResponseMessage?.selectedButtonId ||
+    message?.listResponseMessage?.singleSelectReply?.selectedRowId || "";
+  return String(text).trimStart().startsWith(config.prefix);
 }
 function unwrapAntideletePayload(message) {
   let current = message?.message || message;

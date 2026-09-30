@@ -1876,7 +1876,8 @@ async function downloadWithYtDlp(input, kind) {
     } : process.env;
     let lastError;
     for (const client of clients) {
-      const args = ["--no-playlist", "--no-warnings", "--force-ipv4", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "--merge-output-format", "mp4", "-f", format, "-o", outputTemplate];
+      // Do not force an address family; let the host use its available route.
+      const args = ["--no-playlist", "--no-warnings", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "--merge-output-format", "mp4", "-f", format, "-o", outputTemplate];
       if (hasPotProvider) args.push("--extractor-args", `youtubepot-bgutilscript:server_home=${potProviderHome}`);
       if (cookieFile && fs.existsSync(cookieFile)) args.push("--cookies", cookieFile);
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");

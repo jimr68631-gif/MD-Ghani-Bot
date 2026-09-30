@@ -362,7 +362,8 @@ const getToggles = (id) => {
 const setToggle = (id, key, val) => {
   const t = getToggles(id);
   if (!(key in t)) return false;
-  t[key] = val === true || val === "true" || val === "on";
+  const normalized = typeof val === "string" ? val.trim().toLowerCase() : val;
+  t[key] = normalized === true || normalized === "true" || normalized === "on";
   return true;
 };
 const isOn = (id, key) => !!getToggles(id)[key];
@@ -677,10 +678,49 @@ function wireHandlers(sessionId) {
       Promise.resolve(handleMessage(sock, msg, sessionId)).catch((e) => log.error(`handler: ${e.message}`));
     }
   });
-  sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
-    if (!id?.endsWith("@g.us") || !["add", "remove", "leave"].includes(action)) return;
+  sock.ev.on("group-participants.update", async (update) => {
+    const { id, participants, action } = update || {};
+    if (!id?.endsWith("@g.us") || !["add", "remove", "leave", "promote", "demote"].includes(action)) return;
     try {
       groupMetadataCache.delete(id);
+      if (action === "promote" || action === "demote") {
+        const policy = action === "promote" ? "antipromote" : "antidemote";
+        if (!getToggles(id)[policy] || !(await isBotAdmin(sock, id))) return;
+        const actor = update.author || update.actor || update.sender || null;
+        const targets = (participants || []).map((participant) =>
+          typeof participant === "string" ? participant : participant?.id || participant?.jid
+        ).filter(Boolean);
+        if (action === "promote") {
+          for (const target of targets) {
+            await sock.groupParticipantsUpdate(id, [target], "demote").catch((error) =>
+              log.warn(`antipromote rollback failed: ${error?.message || error}`)
+            );
+          }
+        }
+        const actorJid = actor ? await resolveOriginalJid(sock, actor) : null;
+        const actorIsController = !!actor && isController(sock, id, {
+          key: { participantAlt: actor, participant: actorJid, fromMe: false },
+        }, sessionId);
+        const targetText = targets.map((target) => `@${cleanJid(target) || target}`).join(", ") || "group member";
+        const actionText = action === "promote" ? "promotion was reversed" : "member was demoted";
+        if (actor) {
+          await sock.sendMessage(id, {
+            text: `⚠️ *${policy.toUpperCase()}* — ${targetText}: ${actionText}. The admin who changed the role is being removed.`,
+            mentions: [actor],
+          }).catch(() => {});
+          if (!actorIsController) {
+            await sock.groupParticipantsUpdate(id, [actor], "remove").catch((error) =>
+              log.warn(`${policy} actor removal failed: ${error?.message || error}`)
+            );
+          }
+        } else {
+          await sock.sendMessage(id, {
+            text: `⚠️ *${policy.toUpperCase()}* — ${targetText}: ${actionText}. The acting admin could not be identified, so no one was kicked.`,
+          }).catch(() => {});
+          log.warn(`${policy}: group event did not include an actor; cannot safely kick the admin`);
+        }
+        return;
+      }
       if (action === "add" && getToggles(id).antiraid && participants?.length) {
         const now = Date.now();
         const recent = (raidState.get(id) || []).filter((time) => now - time < 60000);
@@ -713,7 +753,10 @@ function wireHandlers(sessionId) {
     for (const item of updates || []) {
       const edited = item.update?.message?.protocolMessage?.type === 14;
       const editedKey = item.update?.message?.protocolMessage?.key || item.key;
-      if (edited && editedKey?.remoteJid?.endsWith("@g.us") && getToggles(sessionId).antiedit) {
+      const editedGroup = editedKey?.remoteJid;
+      const antieditEnabled = getToggles(sessionId).antiedit ||
+        (editedGroup?.endsWith("@g.us") && getToggles(editedGroup).antiedit);
+      if (edited && editedGroup?.endsWith("@g.us") && antieditEnabled) {
         const old = findCachedMessage(editedKey);
         const before = unwrapMessage(old?.message);
         const after = unwrapMessage(item.update?.message?.protocolMessage?.editedMessage);
@@ -955,6 +998,48 @@ const LINK_RE = /(https?:\/\/|wa\.me\/|chat\.whatsapp\.com\/|t\.me\/)/i;
 const BAD_WORDS = ["madarchod","bhenchod","bhosdi","gandu","chutiya","randi","loda","lund"];
 const antilinkActionState = new Map();
 
+function getMentionedJids(message) {
+  return [...new Set(Object.values(message || {})
+    .flatMap((part) => part?.contextInfo?.mentionedJid || [])
+    .filter((jid) => typeof jid === "string" && jid.length > 0))];
+}
+
+function isBotMention(sock, mentionedJids, text) {
+  const botNumbers = new Set([sock.user?.id, sock.user?.lid].map(cleanJid).filter(Boolean));
+  if (mentionedJids.some((jid) => botNumbers.has(cleanJid(jid)))) return true;
+  return [...botNumbers].some((number) => String(text || "").includes(`@${number}`));
+}
+
+function isAntibugPayload(message, text) {
+  const document = message?.documentMessage || {};
+  const source = `${text || ""} ${document.fileName || ""} ${document.mimetype || ""}`;
+  const malwareTerms = /\b(?:malware|ransomware|trojan|keylogger|spyware|virus|worm)\b/i;
+  const exploitTerms = /\b(?:crash payload|exploit payload|whatsapp crash|bug payload)\b/i;
+  const executableFile = /\.(?:apk|exe|dll|bat|cmd|scr|msi|jar|vbs|ps1|hta)(?:[?#\s"']|$)/i;
+  const dangerousScheme = /(?:javascript\s*:|data\s*:\s*text\/html)/i;
+  const controlBytes = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
+  const repeatedPayload = /(.)\1{500,}/s;
+  return malwareTerms.test(source) || exploitTerms.test(source) || executableFile.test(source) ||
+    dangerousScheme.test(source) || controlBytes.test(text || "") || repeatedPayload.test(text || "");
+}
+
+function findGroupStatusPayload(root, depth = 0) {
+  if (!root || typeof root !== "object" || depth > 8) return null;
+  for (const [key, value] of Object.entries(root)) {
+    if (/^(?:groupStatusMessage(?:V\d+)?|groupStatusMentionMessage|statusMentionMessage)$/.test(key)) return value;
+    const nested = findGroupStatusPayload(value, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function groupStatusContainsLink(message) {
+  const payload = findGroupStatusPayload(message);
+  if (!payload) return false;
+  try { return LINK_RE.test(JSON.stringify(payload)); }
+  catch { return false; }
+}
+
 async function runAnti(sock, msg, sessionId, toggles) {
   const from = msg.key.remoteJid;
   if (!from?.endsWith("@g.us")) return;
@@ -962,7 +1047,7 @@ async function runAnti(sock, msg, sessionId, toggles) {
   if (!(await isBotAdmin(sock, from))) return;
   toggles = getToggles(from);
 
-  const antiKeys = ["antilink", "antiinvite", "antispam", "antiflood", "antiraid", "antibadword", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antistatus", "antiforward", "antiviewonce"];
+  const antiKeys = ["antilink", "antiinvite", "antispam", "antiflood", "antiraid", "antibadword", "antibot", "antibug", "antimessage", "antidemote", "antipromote", "antitag", "antitagadmin", "antistatuslinkkick", "antisticker", "antiimage", "antivideo", "antivoice", "antidocument", "antigif", "antilocation", "anticontact", "antipoll", "antistatus", "antiforward", "antiviewonce"];
   if (!antiKeys.some((key) => toggles[key])) return;
 
   const sender = msg.key.participantAlt || msg.key.participant || from;
@@ -971,6 +1056,38 @@ async function runAnti(sock, msg, sessionId, toggles) {
     message?.imageMessage?.caption || message?.videoMessage?.caption || "";
 
   const isAdmin = await isUserAdmin(sock, from, sender);
+  const mentionedJids = getMentionedJids(message);
+  const isControllerSender = isController(sock, from, msg, sessionId);
+
+  if (toggles.antibug && isAntibugPayload(message, text)) {
+    await takeAction(sock, from, sender, msg, "antibug", { kick: true });
+    return;
+  }
+  if (toggles.antistatuslinkkick && groupStatusContainsLink(msg.message)) {
+    await takeAction(sock, from, sender, msg, "antistatuslinkkick", { kick: true });
+    return;
+  }
+  if (toggles.antibot && !isControllerSender &&
+      (String(text).trim().startsWith(config.prefix) || isBotMention(sock, mentionedJids, text))) {
+    await takeAction(sock, from, sender, msg, "antibot", { noKick: true });
+    return;
+  }
+  if (toggles.antitagadmin && mentionedJids.length) {
+    for (const jid of mentionedJids) {
+      if (await isUserAdmin(sock, from, jid)) {
+        await takeAction(sock, from, sender, msg, "antitagadmin", { noKick: true });
+        return;
+      }
+    }
+  }
+  if (toggles.antitag && mentionedJids.length) {
+    await takeAction(sock, from, sender, msg, "antitag", { noKick: true });
+    return;
+  }
+  if (toggles.antimessage && !isAdmin) {
+    await takeAction(sock, from, sender, msg, "antimessage", { noKick: true });
+    return;
+  }
   if (isAdmin) return;
 
   const now = Date.now();
@@ -994,35 +1111,42 @@ async function runAnti(sock, msg, sessionId, toggles) {
     ["antilink", () => LINK_RE.test(text)],
     ["antiinvite", () => /chat\.whatsapp\.com\//i.test(text)],
     ["antibadword", () => BAD_WORDS.some((w) => text.toLowerCase().includes(w))],
-    ["antisticker", () => !!msg.message?.stickerMessage],
-    ["antiimage", () => !!msg.message?.imageMessage],
-    ["antivideo", () => !!msg.message?.videoMessage],
-    ["antivoice", () => !!msg.message?.audioMessage?.ptt],
-    ["antidocument", () => !!msg.message?.documentMessage],
-    ["antigif", () => !!msg.message?.videoMessage?.gifPlayback],
-    ["antilocation", () => !!msg.message?.locationMessage],
-    ["anticontact", () => !!msg.message?.contactMessage],
+    ["antitagadmin", async () => {
+      for (const jid of mentionedJids) {
+        if (await isUserAdmin(sock, from, jid)) return true;
+      }
+      return false;
+    }],
+    ["antitag", () => mentionedJids.length > 0],
+    ["antisticker", () => !!message?.stickerMessage],
+    ["antiimage", () => !!message?.imageMessage],
+    ["antivideo", () => !!message?.videoMessage],
+    ["antivoice", () => !!message?.audioMessage?.ptt],
+    ["antidocument", () => !!message?.documentMessage],
+    ["antigif", () => !!message?.videoMessage?.gifPlayback],
+    ["antilocation", () => !!message?.locationMessage],
+    ["anticontact", () => !!message?.contactMessage],
     ["antipoll", () => Object.keys(message || {}).some((key) => /^pollCreationMessage(?:V\d+)?$/.test(key) && !!message[key])],
     ["antistatus", () => ["groupStatusMessage", "groupStatusMessageV2", "groupStatusMentionMessage", "statusMentionMessage"].some((key) => !!message?.[key])],
-    ["antiforward", () => !!msg.message?.extendedTextMessage?.contextInfo?.forwardingScore],
+    ["antiforward", () => !!message?.extendedTextMessage?.contextInfo?.forwardingScore],
     ["antiviewonce", () => !!(msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2)],
   ];
 
   for (const [key, test] of checks) {
     if (!toggles[key]) continue;
-    if (!test()) continue;
+    if (!(await test())) continue;
     await takeAction(sock, from, sender, msg, key);
     return;
   }
 }
 
-async function takeAction(sock, group, user, msg, key) {
+async function takeAction(sock, group, user, msg, key, options = {}) {
   try {
     const warningKey = `${group}:${user}:${key}`;
     const warningNumber = Math.min(3, (antiWarningCounts.get(warningKey) || 0) + 1);
     antiWarningCounts.set(warningKey, warningNumber);
     await sock.sendMessage(group, { delete: msg.key }).catch(() => {});
-    const shouldRemove = warningNumber >= 3;
+    const shouldRemove = options.kick === true || (!options.noKick && warningNumber >= 3);
     const participants = groupMetadataCache.get(group)?.data?.participants || [];
     const identity = await resolveUserIdentity(sock, [msg?.key?.participantAlt, user], participants, msg?.pushName);
     const participant = participants.find((p) => [p.id, p.jid, p.phoneNumber].filter(Boolean)
@@ -1036,7 +1160,11 @@ async function takeAction(sock, group, user, msg, key) {
     const hasDisplayName = !!name;
     const mentionJid = identity.jid && !String(identity.jid).endsWith("@g.us") ? identity.jid : user;
     const userLabel = hasDisplayName ? name : (cleanJid(mentionJid) && !String(mentionJid).endsWith("@g.us") ? `@${cleanJid(mentionJid)}` : "Group member");
-    const warningText = antiWarningStyles[warningNumber - 1](userLabel, key.toUpperCase());
+    const warningText = options.kick
+      ? `🚨 *${key.toUpperCase()}* — ${userLabel}: message deleted and user removed immediately.`
+      : options.noKick
+        ? `⚠️ *${key.toUpperCase()}* — ${userLabel}: message deleted. Warning ${warningNumber}/3; this rule does not auto-kick.`
+        : antiWarningStyles[warningNumber - 1](userLabel, key.toUpperCase());
     await sock.sendMessage(group, {
       text: warningText,
       mentions: hasDisplayName || !cleanJid(mentionJid) || String(mentionJid).endsWith("@g.us") ? [] : [mentionJid],
@@ -1607,12 +1735,13 @@ register("antilink", {
 register("autostatuslinkkick", {
   toggle: null,
   run: async ({ sock, from, args, sessionId }) => {
+    const scope = from.endsWith("@g.us") ? from : sessionId;
     if (!args[0]) {
-      const t = getToggles(sessionId);
+      const t = getToggles(scope);
       return sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", t.antistatuslinkkick, "Use: .autostatuslinkkick on/off") });
     }
-    setToggle(sessionId, "antistatuslinkkick", args[0]);
-    await sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", getToggles(sessionId).antistatuslinkkick, "Updated") });
+    setToggle(scope, "antistatuslinkkick", args[0]);
+    await sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", getToggles(scope).antistatuslinkkick, "Updated") });
   },
 });
 register("set", {

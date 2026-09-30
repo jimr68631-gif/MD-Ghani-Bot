@@ -2000,10 +2000,9 @@ async function sendYouTubeMedia(sock, from, input, kind) {
 
   if (isAudio) {
     const output = {
-      document: media.buffer || { url: media.mediaUrl },
+      audio: media.buffer || { url: media.mediaUrl },
       mimetype: "audio/mpeg",
-      fileName: mediaFileName(title, "mp3"),
-      caption: `✅ *MP3 READY*\n🎵 ${title}\n⏱️ ${duration}`,
+      ptt: false,
     };
     await sock.sendMessage(from, output);
     return;

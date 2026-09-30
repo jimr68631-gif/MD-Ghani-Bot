@@ -273,6 +273,13 @@ const BOT_ADMIN_OPTIONAL_COMMANDS = new Set([
   "song", "play", "song2", "video", "tagall", "tag", "movie", "antidelete",
   "welcome", "goodbye", "setwelcome", "setgoodbye", "botstatus",
 ]);
+// Only these commands are available to verified group admins who are not the connected owner.
+const GROUP_ADMIN_ALLOWED_COMMANDS = new Set([
+  "menu", "help", "rules", "groupinfo", "totalmembers", "admins",
+  "settings", "securitystatus", "botstatus",
+  "warn", "kick", "open", "close",
+  "antilink", "antimessage", "antitag", "antitagadmin", "antibot", "antibug", "antistatuslinkkick",
+]);
 const GROUP_ADMIN_COMMANDS = new Set([
   "add", "kick", "promote", "demote", "kickall", "kickoffline", "leave",
   "tagall", "mention", "hidetag", "open", "close", "restrict", "unrestrict",
@@ -1263,14 +1270,14 @@ async function handleMessage(sock, msg, sessionId) {
     if (OWNER_ONLY_SILENT_COMMANDS.has(normalizedCommand) && !isController(sock, from, msg, sessionId)) return;
     const groupChat = from.endsWith("@g.us");
     const controller = isController(sock, from, msg, sessionId);
-    // Keep group control private to the connected bot owner. Other members'
-    // commands remain silent, matching the prior group behavior.
-    if (groupChat && !controller) return;
+    const groupAdminCommand = GROUP_ADMIN_ALLOWED_COMMANDS.has(normalizedCommand);
     const requiresGroupAdmin = GROUP_ADMIN_COMMANDS.has(normalizedCommand);
-    const groupAdmin = groupChat && requiresGroupAdmin
+    const groupAdmin = groupChat && (requiresGroupAdmin || groupAdminCommand)
       ? await isUserAdmin(sock, from, [msg.key?.participantAlt, msg.key?.participant,
         ...(msg.key?.fromMe ? [sock.user?.id, sock.user?.lid] : [])])
       : false;
+    // Non-owner group members may run only the allowlisted commands, and only as group admins.
+    if (groupChat && !controller && (!groupAdminCommand || !groupAdmin)) return;
     if (groupChat && requiresGroupAdmin && !groupAdmin) return;
     const botAdmin = groupChat && requiresGroupAdmin ? await isBotAdmin(sock, from) : false;
     const botAdminOptional = normalizedCommand === "antidelete" ||

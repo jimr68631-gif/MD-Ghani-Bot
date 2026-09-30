@@ -1284,13 +1284,13 @@ async function handleMessage(sock, msg, sessionId) {
         run: async ({ sock: targetSock, from: targetFrom }) => {
           const groups = [
             ["👑 OWNER & BOT", /^(owner|mode|health|setprefix|backup|restore|broadcast|bc|restart|shutdown|pair|session|addmenu|delmenu)/i],
-            ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|members|admins|groupstats|pending|reject|rejectall|approve|cancelapprove|rules|setrules|clearwarnings|tagall|tag|tagme|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|open|close|opentime|closetime)/i],
+            ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g$|welcome|goodbye|members|admins|groupstats|pending|reject|rejectall|approve|cancelapprove|rules|setrules|clearwarnings|tagall|tag|tagme|hidetag|linkgroup|invite|revoke|setname|setdesc|setgrouppp|open|close|opentime|closetime)/i],
             ["⚔️ SECURITY & ANTI", /^(anti|antilink|antibadword|antibot|antidelete|antiedit|antispam|antiflood|antiraid|antiinvite|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
             ["🎵 MEDIA & DOWNLOAD", /^(play|song|song2|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
-            ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
+            ["🖼️ STICKER & IMAGE", /^(sticker|s$|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
             ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|kiss|hug|slap|pat|punch|kill|diceroll|coin|8ball)/i],
-            ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp)/i],
-            ["⚙️ SETTINGS & AUTO", /^(set|toggle|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|settings|config|reset)/i],
+            ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getbio|getid|getdp)/i],
+            ["⚙️ SETTINGS & AUTO", /^(set|toggle|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|autostatuslinkkick|alwaysonline|settings|config|reset)/i],
           ];
           const names = [...commands.keys()];
           const grouped = groups.map(([title, rule]) => [title, names.filter((name) => rule.test(name))]);
@@ -2732,13 +2732,13 @@ register("menu", {
   run: async ({ sock, from }) => {
     const categoryRules = [
       ["👑 OWNER & BOT", /^(owner|mode|health|setprefix|backup|restore|broadcast|broadcastgroup|bc|restart|shutdown|pair|session|addmenu|delmenu|maintenance|diagnose|ownerinfo)/i],
-      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g|members|admins|groupstats|groupstatus|pending|reject|approve|cancelapprove|rules|setrules|tagall|tag|tagme|hidetag|linkgroup|getlink|invite|revoke|setname|setdesc|groupdesc|setgrouppp|open|close|warnings|resetmember|clearwarnings|lockdown|slowmode|keywordreply|report|poll|remind|note|notes|groupbackup|restoregroup|welcomeedit|groupmenu|privacycheck|opentime|closetime)/i],
+      ["🛡️ GROUP MANAGEMENT", /^(kick|add|promote|demote|group|g$|welcome|goodbye|members|admins|groupstats|groupstatus|pending|reject|approve|cancelapprove|rules|setrules|tagall|tag|tagme|hidetag|linkgroup|getlink|invite|revoke|setname|setdesc|groupdesc|setgrouppp|open|close|warnings|resetmember|clearwarnings|lockdown|slowmode|keywordreply|report|poll|remind|note|notes|groupbackup|restoregroup|welcomeedit|groupmenu|privacycheck|opentime|closetime)/i],
       ["⚔️ SECURITY & ANTI", /^(anti|sentinel|trustlevel|verify|quarantine|release|riskcheck|smartfilter|incident|timeline|case|appeal|appeals|approveappeal|rejectappeal|rulecheck|autowarn|permission|commandlock|role|automod|antical|antispamlink|antilink|antibadword|antibot|antidelete|antiedit|antispam|antiflood|antiraid|antiinvite|antidemote|antipromote|antistatus|antitag|antivideo|antiimage)/i],
       ["🎵 MEDIA & DOWNLOAD", /^(play|song|audio|video|yt|youtube|tiktok|download|dl|instagram|ig|facebook|fb|twitter|media|toaudio|tomp3|ytmp)/i],
-      ["🖼️ STICKER & IMAGE", /^(sticker|s|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
+      ["🖼️ STICKER & IMAGE", /^(sticker|s$|stiker|toimg|image|photo|blur|crop|take|emojimix|write)/i],
       ["🎮 FUN & GAMES", /^(fun|joke|meme|quote|truth|dare|ship|love|cuddle|kiss|hug|poke|slap|pat|kill|shoot|smile|wink|danger|shy|reactionmenu|punch|diceroll|coin|8ball)/i],
-      ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getid|getdp|safeurl|digest|leaderboard|pollresult)/i],
-      ["⚙️ SETTINGS & AUTO", /^(set|toggle|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|alwaysonline|autoreply|setautoreply|goodmorning|goodnight|birthday|settings|config|reset|setwelcome|setgoodbye)/i],
+      ["🔧 TOOLS", /^(calc|weather|translate|wiki|google|lyrics|short|qr|readqr|ss|fetch|url|ping|runtime|uptime|device|time|date|status|fakeinfo|profile|getbio|getid|getdp|safeurl|digest|leaderboard|pollresult)/i],
+      ["⚙️ SETTINGS & AUTO", /^(set|toggle|autoseen|autoreact|autotyping|autorecording|autorecordtyping|autoreacttyping|autoviewstatus|autoreactstatus|autosavestatus|autostatuslinkkick|alwaysonline|autoreply|setautoreply|goodmorning|goodnight|birthday|settings|config|reset|setwelcome|setgoodbye)/i],
     ];
     const grouped = new Map(categoryRules.map(([title]) => [title, []]));
     const other = [];

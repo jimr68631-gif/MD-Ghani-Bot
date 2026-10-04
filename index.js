@@ -260,6 +260,42 @@ const pair = {
  *  3. TOGGLE STORE
  * ============================================================ */
 const toggleState = new Map();
+const REPEAT_GUARD_TOGGLE_KEYS = new Set([
+  "alwaysonline", "antibot", "antidelete", "antidemote", "antiimage", "antilink",
+  "antipoll", "antipromote", "antistatus", "antistatuslinkkick", "antisticker",
+  "antivideo", "antivoice",
+]);
+const toggleStateFile = path.resolve(config.sessionDir, ".repeat-guard-toggle-state.json");
+function saveRepeatGuardToggleState() {
+  const saved = {};
+  for (const [scope, values] of toggleState) {
+    const selected = {};
+    for (const key of REPEAT_GUARD_TOGGLE_KEYS) selected[key] = values?.[key] ?? defaultToggles[key];
+    if ([...REPEAT_GUARD_TOGGLE_KEYS].some((key) => selected[key] !== defaultToggles[key])) saved[scope] = selected;
+  }
+  const tempFile = `${toggleStateFile}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(toggleStateFile), { recursive: true });
+    fs.writeFileSync(tempFile, JSON.stringify(saved));
+    fs.renameSync(tempFile, toggleStateFile);
+  } catch (error) {
+    try { fs.rmSync(tempFile, { force: true }); } catch {}
+    log.warn(`toggle state save failed: ${error?.message || error}`);
+  }
+}
+try {
+  if (fs.existsSync(toggleStateFile)) {
+    const saved = JSON.parse(fs.readFileSync(toggleStateFile, "utf8"));
+    for (const [scope, values] of Object.entries(saved || {})) {
+      if (!scope || !values || typeof values !== "object") continue;
+      const state = { ...defaultToggles };
+      for (const key of REPEAT_GUARD_TOGGLE_KEYS) {
+        if (typeof values[key] === "boolean") state[key] = values[key];
+      }
+      toggleState.set(scope, state);
+    }
+  }
+} catch (error) { log.warn(`toggle state load failed: ${error?.message || error}`); }
 const groupMessageSettings = new Map();
 const antiWarningCounts = new Map();
 const spamState = new Map();
@@ -278,6 +314,7 @@ const GROUP_ADMIN_ALLOWED_COMMANDS = new Set([
   "menu", "help", "rules", "groupinfo", "totalmembers", "admins",
   "settings", "securitystatus", "botstatus",
   "warn", "kick", "open", "close",
+  "welcome", "goodbye", "setwelcome", "setgoodbye",
   "antilink", "antimessage", "antitag", "antitagadmin", "antibot", "antibug", "antistatuslinkkick",
 ]);
 const GROUP_ADMIN_COMMANDS = new Set([
@@ -299,25 +336,74 @@ const GROUP_ADMIN_COMMANDS = new Set([
 // These commands must be completely silent for everyone except the connected owner.
 const OWNER_ONLY_SILENT_COMMANDS = new Set([
   "song", "song2", "play", "video", "tag", "tagall",
-  "welcome", "goodbye", "setwelcome", "setgoodbye",
 ]);
-const getGroupMessageSettings = (group) => {
-  if (!groupMessageSettings.has(group)) {
-    groupMessageSettings.set(group, {
-      welcome: "🎉 Welcome {user} to {group}. You are member #{count}.",
-      goodbye: "👋 Goodbye {user} from {group}. You are member #{count}.",
-      rules: "No group rules have been set yet.",
-      autoreply: "Thanks for your message.",
-      welcomeEnabled: false,
-      goodbyeEnabled: false,
-    });
+const defaultGroupMessageSettings = () => ({
+  welcome: "🎉 Welcome {user} to {group}. You are member #{count}.",
+  goodbye: "👋 Goodbye {user} from {group}. You are member #{count}.",
+  rules: "No group rules have been set yet.",
+  autoreply: "Thanks for your message.",
+  welcomeEnabled: false,
+  goodbyeEnabled: false,
+});
+const groupMessageSettingsFile = path.resolve(config.sessionDir, ".group-message-settings.json");
+const normalizeGroupMessageSettings = (value) => {
+  const defaults = defaultGroupMessageSettings();
+  return {
+    welcome: typeof value?.welcome === "string" ? value.welcome : defaults.welcome,
+    goodbye: typeof value?.goodbye === "string" ? value.goodbye : defaults.goodbye,
+    rules: typeof value?.rules === "string" ? value.rules : defaults.rules,
+    autoreply: typeof value?.autoreply === "string" ? value.autoreply : defaults.autoreply,
+    welcomeEnabled: value?.welcomeEnabled === true,
+    goodbyeEnabled: value?.goodbyeEnabled === true,
+  };
+};
+try {
+  if (fs.existsSync(groupMessageSettingsFile)) {
+    const saved = JSON.parse(fs.readFileSync(groupMessageSettingsFile, "utf8"));
+    for (const [group, settings] of Object.entries(saved || {})) {
+      if (group.endsWith("@g.us") && settings && typeof settings === "object") {
+        groupMessageSettings.set(group, normalizeGroupMessageSettings(settings));
+      }
+    }
   }
+} catch (error) { log.warn(`group message settings load failed: ${error?.message || error}`); }
+function saveGroupMessageSettings() {
+  const tempFile = `${groupMessageSettingsFile}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(groupMessageSettingsFile), { recursive: true });
+    fs.writeFileSync(tempFile, JSON.stringify(Object.fromEntries(groupMessageSettings)));
+    fs.renameSync(tempFile, groupMessageSettingsFile);
+  } catch (error) {
+    try { fs.rmSync(tempFile, { force: true }); } catch {}
+    log.warn(`group message settings save failed: ${error?.message || error}`);
+  }
+}
+const getGroupMessageSettings = (group) => {
+  if (!groupMessageSettings.has(group)) groupMessageSettings.set(group, defaultGroupMessageSettings());
   return groupMessageSettings.get(group);
 };
-const formatGroupMessage = (template, groupName, user, count) => String(template)
-  .replaceAll("{group}", groupName)
-  .replaceAll("{user}", `@${user.split("@")[0]}`)
-  .replaceAll("{count}", String(count));
+function normalizeJidValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.includes("@")) return text;
+  const digits = text.replace(/\D/g, "");
+  return digits ? `${digits}@s.whatsapp.net` : null;
+}
+function isMentionableJid(jid) {
+  return !!jid && !String(jid).endsWith("@lid") && !String(jid).endsWith("@g.us");
+}
+function mentionLabel(jid, fallback = "group member") {
+  if (!isMentionableJid(jid)) return fallback;
+  const number = cleanJid(jid);
+  return number ? `@${number}` : fallback;
+}
+const formatGroupMessage = (template, groupName, user, count) => {
+  const jid = normalizeJidValue(user);
+  return String(template)
+    .replaceAll("{group}", groupName)
+    .replaceAll("{user}", mentionLabel(jid, "member"))
+    .replaceAll("{count}", String(count));
+};
 async function resolveOriginalJid(sock, jid) {
   if (!jid || !String(jid).endsWith("@lid")) return jid;
   const mappings = [
@@ -362,6 +448,24 @@ async function resolveUserIdentity(sock, candidates, participants = [], fallback
     (cleanJid(jid) ? "WhatsApp contact" : "Unknown user");
   return { jid, name };
 }
+async function resolveParticipantMentionJid(sock, participant, groupParticipants = []) {
+  const fields = typeof participant === "string"
+    ? [participant]
+    : [participant?.phoneNumber, participant?.jid, participant?.id, participant?.lid].filter(Boolean);
+  const candidates = fields.map(normalizeJidValue).filter(Boolean);
+  const explicitPhone = typeof participant === "string" ? null : normalizeJidValue(participant?.phoneNumber);
+  if (isMentionableJid(explicitPhone)) return explicitPhone;
+  const resolved = [];
+  for (const candidate of candidates) {
+    const mapped = normalizeJidValue(await resolveOriginalJid(sock, candidate));
+    if (isMentionableJid(mapped)) return mapped;
+    if (mapped) resolved.push(mapped);
+  }
+  const identity = await resolveUserIdentity(sock, [...candidates, ...resolved], groupParticipants);
+  const identityJid = normalizeJidValue(identity?.jid);
+  if (isMentionableJid(identityJid)) return identityJid;
+  return identityJid || resolved[0] || candidates[0] || null;
+}
 const getToggles = (id) => {
   if (!toggleState.has(id)) toggleState.set(id, { ...defaultToggles });
   return toggleState.get(id);
@@ -370,8 +474,15 @@ const setToggle = (id, key, val) => {
   const t = getToggles(id);
   if (!(key in t)) return false;
   const normalized = typeof val === "string" ? val.trim().toLowerCase() : val;
+  const previous = t[key];
   t[key] = normalized === true || normalized === "true" || normalized === "on";
+  if (previous !== t[key] && REPEAT_GUARD_TOGGLE_KEYS.has(key)) saveRepeatGuardToggleState();
   return true;
+};
+const setToggleIfChanged = (id, key, val) => {
+  const previous = getToggles(id)[key];
+  const ok = setToggle(id, key, val);
+  return { ok, changed: ok && previous !== getToggles(id)[key] };
 };
 const isOn = (id, key) => !!getToggles(id)[key];
 const styledToggleReply = (name, enabled, detail = "") => `╭━━━❰ *${String(name).toUpperCase()}* ❱━━━╮
@@ -649,6 +760,7 @@ async function startSession(sessionId, phoneNumber) {
         log.error(`🚫 ${sessionId} logged out`);
         sessions.delete(sessionId);
         toggleState.delete(sessionId);
+        saveRepeatGuardToggleState();
       }
     }
   });
@@ -707,11 +819,15 @@ function wireHandlers(sessionId) {
       // Append events are history/backfill, not new user commands. Also ignore
       // a repeated notify for the same WhatsApp message ID.
       if (type !== "notify") continue;
-      const messageToken = msg.key?.id ? `${sessionId}:${msg.key.remoteJid || ""}:${msg.key.id}` : null;
+      const messageId = msg.key?.id ? String(msg.key.id) : null;
+      const messageToken = messageId ? `${sessionId}:id:${messageId}` : null;
       if (messageToken) {
         if (processedUpsertMessages.has(messageToken)) continue;
         const commandText = isPrefixedCommandMessage(msg);
-        if (commandText && processedCommandMessages.has(messageToken)) {
+        const legacyTokens = [...new Set([msg.key?.remoteJid, msg.key?.remoteJidAlt]
+          .filter(Boolean).map((jid) => `${sessionId}:${jid}:${messageId}`))];
+        if (commandText && (processedCommandMessages.has(messageToken) ||
+            legacyTokens.some((token) => processedCommandMessages.has(token)))) {
           processedUpsertMessages.add(messageToken);
           continue;
         }
@@ -735,9 +851,13 @@ function wireHandlers(sessionId) {
         const policy = action === "promote" ? "antipromote" : "antidemote";
         if (!getToggles(id)[policy] || !(await isBotAdmin(sock, id))) return;
         const actor = update.author || update.actor || update.sender || null;
-        const targets = (participants || []).map((participant) =>
-          typeof participant === "string" ? participant : participant?.id || participant?.jid
-        ).filter(Boolean);
+        const targetRecords = (participants || []).filter(Boolean);
+        const targets = targetRecords.map((participant) => normalizeJidValue(
+          typeof participant === "string" ? participant : participant?.id || participant?.jid || participant?.phoneNumber || participant?.lid
+        )).filter(Boolean);
+        if (!targets.length) return;
+        const md = await sock.groupMetadata(id).catch(() => ({ participants: [] }));
+        const knownParticipants = md?.participants || [];
         if (action === "promote") {
           for (const target of targets) {
             await sock.groupParticipantsUpdate(id, [target], "demote").catch((error) =>
@@ -745,25 +865,35 @@ function wireHandlers(sessionId) {
             );
           }
         }
-        const actorJid = actor ? await resolveOriginalJid(sock, actor) : null;
+        const actorJid = actor ? await resolveParticipantMentionJid(sock, actor, knownParticipants) : null;
+        const targetMentionJids = [...new Set(await Promise.all(
+          targetRecords.map((participant) => resolveParticipantMentionJid(sock, participant, knownParticipants))
+        ))].filter(Boolean);
         const actorIsController = !!actor && isController(sock, id, {
           key: { participantAlt: actor, participant: actorJid, fromMe: false },
         }, sessionId);
-        const targetText = targets.map((target) => `@${cleanJid(target) || target}`).join(", ") || "group member";
+        const targetText = targetMentionJids.map((jid) => mentionLabel(jid, "affected member")).join(", ") || "affected member";
         const actionText = action === "promote" ? "promotion was reversed" : "member was demoted";
+        const mentions = [...new Set([...targetMentionJids, actorJid].filter(isMentionableJid))];
         if (actor) {
+          const actorLabel = mentionLabel(actorJid, "acting admin");
+          const removalText = actorIsController ? "The bot owner is protected from removal." : "The admin who changed the role is being removed.";
           await sock.sendMessage(id, {
-            text: `⚠️ *${policy.toUpperCase()}* — ${targetText}: ${actionText}. The admin who changed the role is being removed.`,
-            mentions: [actor],
+            text: `⚠️ *${policy.toUpperCase()}* — ${targetText}: ${actionText} by ${actorLabel}. ${removalText}`,
+            mentions,
           }).catch(() => {});
           if (!actorIsController) {
-            await sock.groupParticipantsUpdate(id, [actor], "remove").catch((error) =>
-              log.warn(`${policy} actor removal failed: ${error?.message || error}`)
-            );
+            const actorTarget = actorJid || normalizeJidValue(typeof actor === "string" ? actor : actor?.id || actor?.jid || actor?.phoneNumber);
+            if (actorTarget) {
+              await sock.groupParticipantsUpdate(id, [actorTarget], "remove").catch((error) =>
+                log.warn(`${policy} actor removal failed: ${error?.message || error}`)
+              );
+            }
           }
         } else {
           await sock.sendMessage(id, {
-            text: `⚠️ *${policy.toUpperCase()}* — ${targetText}: ${actionText}. The acting admin could not be identified, so no one was kicked.`,
+            text: `⚠️ *${policy.toUpperCase()}* — ${targetText}: ${actionText}. The acting admin could not be identified, so no one was removed.`,
+            mentions,
           }).catch(() => {});
           log.warn(`${policy}: group event did not include an actor; cannot safely kick the admin`);
         }
@@ -781,6 +911,7 @@ function wireHandlers(sessionId) {
           return;
         }
       }
+      if (action !== "add" && action !== "remove" && action !== "leave") return;
       const md = await sock.groupMetadata(id);
       const settings = getGroupMessageSettings(id);
       if (action === "add" && !settings.welcomeEnabled) return;
@@ -788,9 +919,10 @@ function wireHandlers(sessionId) {
       const template = action === "add" ? settings.welcome : settings.goodbye;
       const groupName = md.subject || "Group";
       const count = md.participants.length;
-      for (const user of participants || []) {
-        const text = formatGroupMessage(template, groupName, user, count);
-        await sock.sendMessage(id, { text, mentions: [user] });
+      for (const participant of participants || []) {
+        const user = await resolveParticipantMentionJid(sock, participant, md.participants || []);
+        const text = formatGroupMessage(template, groupName, user || "member", count);
+        await sock.sendMessage(id, { text, mentions: isMentionableJid(user) ? [user] : [] });
       }
     } catch (e) {
       log.warn(`welcome/goodbye message failed: ${e?.message || e}`);
@@ -1747,7 +1879,8 @@ for (const name of AUTO_LIST) {
       const sessionScoped = ["autoviewstatus", "autoreactstatus", "autosavestatus"].includes(name);
       const scope = sessionScoped ? (sock.user?.id?.split(":")[0] || from) : from;
       if (!args[0]) return sock.sendMessage(from, { text: `${styledToggleReply(name, getToggles(scope)[name], `Usage: .${name} on/off`)}` });
-      setToggle(scope, name, args[0]);
+      const result = setToggleIfChanged(scope, name, args[0]);
+      if (!result.changed) return;
       await sock.sendMessage(from, { text: styledToggleReply(name, getToggles(scope)[name], "Updated for this group") });
     },
   });
@@ -1763,8 +1896,10 @@ for (const name of ANTI_LIST) {
           text: styledToggleReply(name, t[name], `Usage: .${name} on/off`),
         });
       }
-      const ok = setToggle(scope, name, args[0]);
-      await sock.sendMessage(from, { text: ok ? styledToggleReply(name, getToggles(scope)[name], "Updated") : styledToggleReply(name, false, "Unknown toggle") });
+      const result = setToggleIfChanged(scope, name, args[0]);
+      if (!result.ok) return sock.sendMessage(from, { text: styledToggleReply(name, false, "Unknown toggle") });
+      if (!result.changed) return;
+      await sock.sendMessage(from, { text: styledToggleReply(name, getToggles(scope)[name], "Updated") });
     },
   });
 }
@@ -1779,12 +1914,15 @@ register("antilink", {
       return sock.sendMessage(from, { text: styledToggleReply("antilink", enabled, `Action: ${action} | Use: .antilink on/off/kick/delete`) });
     }
     if (mode === "kick" || mode === "delete") {
+      const previousAction = antilinkActionState.get(from) || "delete";
+      const result = setToggleIfChanged(from, "antilink", true);
       antilinkActionState.set(from, mode);
-      setToggle(from, "antilink", true);
+      if (previousAction === mode && !result.changed) return;
       return sock.sendMessage(from, { text: styledToggleReply("antilink", true, `Action: ${mode} | Links will be deleted immediately`) });
     }
     if (mode === "on" || mode === "off") {
-      setToggle(from, "antilink", mode);
+      const result = setToggleIfChanged(from, "antilink", mode);
+      if (!result.changed) return;
       return sock.sendMessage(from, { text: styledToggleReply("antilink", mode === "on", "Updated") });
     }
     await sock.sendMessage(from, { text: styledToggleReply("antilink", false, "Usage: .antilink on/off/kick/delete") });
@@ -1798,7 +1936,8 @@ register("autostatuslinkkick", {
       const t = getToggles(scope);
       return sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", t.antistatuslinkkick, "Use: .autostatuslinkkick on/off") });
     }
-    setToggle(scope, "antistatuslinkkick", args[0]);
+    const result = setToggleIfChanged(scope, "antistatuslinkkick", args[0]);
+    if (!result.changed) return;
     await sock.sendMessage(from, { text: styledToggleReply("autostatuslinkkick", getToggles(scope).antistatuslinkkick, "Updated") });
   },
 });
@@ -1806,8 +1945,10 @@ register("set", {
   toggle: null,
   run: async ({ sock, from, args, sessionId }) => {
     if (args.length < 2) return sock.sendMessage(from, { text: styledToggleReply(args[0] || "SET", false, "Usage: .set <key> on/off") });
-    const ok = setToggle(sessionId, args[0], args[1]);
-    await sock.sendMessage(from, { text: ok ? styledToggleReply(args[0], getToggles(sessionId)[args[0]], "Updated") : styledToggleReply(args[0], false, "Unknown toggle") });
+    const result = setToggleIfChanged(sessionId, args[0], args[1]);
+    if (!result.ok) return sock.sendMessage(from, { text: styledToggleReply(args[0], false, "Unknown toggle") });
+    if (!result.changed) return;
+    await sock.sendMessage(from, { text: styledToggleReply(args[0], getToggles(sessionId)[args[0]], "Updated") });
   },
 });
 register("botstatus", {
@@ -1852,7 +1993,9 @@ register("resetsettings", {
   run: async ({ sock, from, msg }) => {
     if (!(await requireGroupAdmin(sock, from, msg))) return;
     toggleState.delete(from);
+    saveRepeatGuardToggleState();
     groupMessageSettings.delete(from);
+    saveGroupMessageSettings();
     antiWarningCounts.delete(from);
     await sock.sendMessage(from, { text: "✅ Group settings reset to defaults. Existing session-wide owner settings were not changed." });
   },
@@ -2067,21 +2210,15 @@ async function downloadWithYtDlp(input, kind) {
     const clients = hasPotProvider
       ? ["mweb"]
       : ["web_safari", "web", "web_creator", "mweb", "android", "tv_embedded", "android_vr"];
-    const cookieFile = process.env.YOUTUBE_COOKIES_FILE;
-    const proxyUrl = String(process.env.YOUTUBE_PROXY || "").trim();
-    // Keep proxy credentials out of yt-dlp's command-line arguments. The
-    // child yt-dlp process and the PO-token helper both inherit these vars.
-    const downloadEnv = proxyUrl ? {
-      ...process.env,
-      HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl,
-      http_proxy: proxyUrl, https_proxy: proxyUrl, all_proxy: proxyUrl,
-    } : process.env;
+    const downloadEnv = { ...process.env };
+    for (const key of ["YOUTUBE_PROXY", "YOUTUBE_COOKIES_FILE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) {
+      delete downloadEnv[key];
+    }
     let lastError;
     for (const client of clients) {
       // Do not force an address family; let the host use its available route.
       const args = ["--no-playlist", "--no-warnings", "--no-check-certificates", "--geo-bypass", "--retries", "3", "--fragment-retries", "3", "--retry-sleep", "linear=1::3", "--concurrent-fragments", "1", "--js-runtimes", "node", "--remote-components", "ejs:github", "--extractor-args", `youtube:player_client=${client}`, "--max-filesize", "50M", "--merge-output-format", "mp4", "-f", format, "-o", outputTemplate];
       if (hasPotProvider) args.push("--extractor-args", `youtubepot-bgutilscript:server_home=${potProviderHome}`);
-      if (cookieFile && fs.existsSync(cookieFile)) args.push("--cookies", cookieFile);
       if (kind === "audio") args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "5");
       else args.push("--remux-video", "mp4");
       args.push(url);
@@ -2189,7 +2326,7 @@ async function sendYouTubeMedia(sock, from, input, kind) {
       const blocked = isYouTubeAccessBlocked(errorDetails);
       log.warn(`YouTube ${kind} download failed: ${blocked ? "access or bot-verification block" : (fallbackError?.message || primaryError?.message || fallbackError)}`);
       const message = blocked
-        ? `❌ YouTube is blocking this server's network. Set *YOUTUBE_PROXY* to an authorized, unblocked proxy in hosting to download without cookies.`
+        ? `❌ YouTube refused this download from the bot server. Try a different video or try again later.`
         : `❌ Couldn't download *${title}*. Please try again shortly.`;
       await sock.sendMessage(from, { text: message }).catch(() => {});
       return;
@@ -2548,8 +2685,14 @@ mkOwner("restore", async ({ sock, from }) => {
   if (backup.prefix) config.prefix = String(backup.prefix);
   toggleState.clear();
   for (const [id, values] of Object.entries(backup.toggles || {})) toggleState.set(id, { ...defaultToggles, ...values });
+  saveRepeatGuardToggleState();
   groupMessageSettings.clear();
-  for (const [id, values] of Object.entries(backup.groupSettings || {})) groupMessageSettings.set(id, values);
+  for (const [id, values] of Object.entries(backup.groupSettings || {})) {
+    if (id.endsWith("@g.us") && values && typeof values === "object") {
+      groupMessageSettings.set(id, normalizeGroupMessageSettings(values));
+    }
+  }
+  saveGroupMessageSettings();
   await sock.sendMessage(from, { text: "✅ Settings restored from the latest backup." });
 });
 mkOwner("restart", async ({ sock, from }) => {
@@ -2614,7 +2757,10 @@ mkOwner("snipe", async ({ sock, from }) => sock.sendMessage(from, { text: "🎯 
 mkOwner("save", async ({ sock, from }) => sock.sendMessage(from, { text: "💾 Saved" }));
 mkOwner("owner", async ({ sock, from }) => sock.sendMessage(from, { text: `👑 Owner: ${config.owner.map((o) => "+" + o.split("@")[0]).join(", ")}` }));
 mkOwner("alwaysonline", async ({ sock, from, args, sessionId }) => {
-  if (args[0]) setToggle(sessionId, "alwaysonline", args[0]);
+  if (args[0]) {
+    const result = setToggleIfChanged(sessionId, "alwaysonline", args[0]);
+    if (!result.changed) return;
+  }
   await sock.sendPresenceUpdate(getToggles(sessionId).alwaysonline ? "available" : "unavailable").catch(() => {});
   await sock.sendMessage(from, { text: styledToggleReply("alwaysonline", getToggles(sessionId).alwaysonline, "Updated") });
 });
@@ -2660,16 +2806,20 @@ register("warn", {
 /* ============================================================
  * 19. COMMANDS — SETTINGS
  * ============================================================ */
-register("setwelcome", { toggle: null, run: async ({ sock, from, args }) => {
+register("setwelcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
+  if (!(await requireGroupAdmin(sock, from, msg, false))) return;
   const settings = getGroupMessageSettings(from);
   const message = args.join(" ") || "🎉 Welcome";
   settings.welcome = `${message} {user} to {group}. You are member #{count}.`;
+  saveGroupMessageSettings();
   await sock.sendMessage(from, { text: `✅ Welcome message set:\n${settings.welcome}\n\nOrder: message → user → group name → You are member #count` });
 }});
-register("setgoodbye", { toggle: null, run: async ({ sock, from, args }) => {
+register("setgoodbye", { toggle: null, run: async ({ sock, from, msg, args }) => {
+  if (!(await requireGroupAdmin(sock, from, msg, false))) return;
   const settings = getGroupMessageSettings(from);
   const message = args.join(" ") || "👋 Goodbye";
   settings.goodbye = `${message} {user} from {group}. You are member #{count}.`;
+  saveGroupMessageSettings();
   await sock.sendMessage(from, { text: `✅ Goodbye message set:\n${settings.goodbye}\n\nOrder: message → user → group name → You are member #count` });
 }});
 register("setautoreply", { toggle: null, run: async ({ sock, from, msg, args }) => {
@@ -2677,41 +2827,48 @@ register("setautoreply", { toggle: null, run: async ({ sock, from, msg, args }) 
   const reply = args.join(" ").trim();
   if (!reply) return sock.sendMessage(from, { text: "Usage: .setautoreply <reply text>" });
   getGroupMessageSettings(from).autoreply = reply;
+  saveGroupMessageSettings();
   await sock.sendMessage(from, { text: `✅ Autoreply text updated:\n${reply}\n\nUse .autoreply on/off to control it.` });
 }});
-register("welcome", { toggle: null, run: async ({ sock, from, msg, args, sessionId }) => {
+register("welcome", { toggle: null, run: async ({ sock, from, msg, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   const settings = getGroupMessageSettings(from);
   const mode = String(args[0] || "").toLowerCase();
   if (["on", "off"].includes(mode)) {
-    if (!isController(sock, from, msg, sessionId)) return sock.sendMessage(from, { text: "🚫 Only the bot owner can change welcome ON/OFF." });
-    settings.welcomeEnabled = mode === "on";
+    if (!(await requireGroupAdmin(sock, from, msg, false))) return;
+    const enabled = mode === "on";
+    if (settings.welcomeEnabled === enabled) return;
+    settings.welcomeEnabled = enabled;
+    saveGroupMessageSettings();
     return sock.sendMessage(from, { text: styledToggleReply("welcome", settings.welcomeEnabled, "Automatic messages updated for this group") });
   }
   if (["status", "state"].includes(mode)) {
     return sock.sendMessage(from, { text: styledToggleReply("welcome", settings.welcomeEnabled, "Use .welcome on/off") });
   }
   const md = await sock.groupMetadata(from);
-  const user = msg.key?.participant || from;
-  const text = formatGroupMessage(settings.welcome, md.subject || "Group", user, md.participants.length);
-  await sock.sendMessage(from, { text, mentions: [user] });
+  const user = await resolveParticipantMentionJid(sock, msg.key?.participantAlt || msg.key?.participant, md.participants || []);
+  const text = formatGroupMessage(settings.welcome, md.subject || "Group", user || "member", md.participants.length);
+  await sock.sendMessage(from, { text, mentions: isMentionableJid(user) ? [user] : [] });
 }});
-register("goodbye", { toggle: null, run: async ({ sock, from, msg, args, sessionId }) => {
+register("goodbye", { toggle: null, run: async ({ sock, from, msg, args }) => {
   if (!from.endsWith("@g.us")) return sock.sendMessage(from, { text: "❌ This command works only in groups." });
   const settings = getGroupMessageSettings(from);
   const mode = String(args[0] || "").toLowerCase();
   if (["on", "off"].includes(mode)) {
-    if (!isController(sock, from, msg, sessionId)) return sock.sendMessage(from, { text: "🚫 Only the bot owner can change goodbye ON/OFF." });
-    settings.goodbyeEnabled = mode === "on";
+    if (!(await requireGroupAdmin(sock, from, msg, false))) return;
+    const enabled = mode === "on";
+    if (settings.goodbyeEnabled === enabled) return;
+    settings.goodbyeEnabled = enabled;
+    saveGroupMessageSettings();
     return sock.sendMessage(from, { text: styledToggleReply("goodbye", settings.goodbyeEnabled, "Automatic messages updated for this group") });
   }
   if (["status", "state"].includes(mode)) {
     return sock.sendMessage(from, { text: styledToggleReply("goodbye", settings.goodbyeEnabled, "Use .goodbye on/off") });
   }
   const md = await sock.groupMetadata(from);
-  const user = msg.key?.participant || from;
-  const text = formatGroupMessage(settings.goodbye, md.subject || "Group", user, md.participants.length);
-  await sock.sendMessage(from, { text, mentions: [user] });
+  const user = await resolveParticipantMentionJid(sock, msg.key?.participantAlt || msg.key?.participant, md.participants || []);
+  const text = formatGroupMessage(settings.goodbye, md.subject || "Group", user || "member", md.participants.length);
+  await sock.sendMessage(from, { text, mentions: isMentionableJid(user) ? [user] : [] });
 }});
 register("getbio", { toggle: null, run: async ({ sock, from }) => {
   const st = await sock.fetchStatus(from);
@@ -2938,6 +3095,7 @@ registerSuggested("groupbackup", { run: async ({ sock, from }) => {
 registerSuggested("restoregroup", { run: async ({ sock, from }) => {
   const b = suggestedData(from).backup; if (!b) return sock.sendMessage(from, { text: "❌ No group backup found." });
   Object.assign(getGroupMessageSettings(from), b.messages || {}); toggleState.set(from, { ...defaultToggles, ...(b.toggles || {}) });
+  saveRepeatGuardToggleState();
   await sock.sendMessage(from, { text: "✅ Group configuration restored." });
 }});
 registerSuggested("maintenance", { run: async ({ sock, from, args }) => suggestedToggle({ sock, from, args }, "maintenance", "Owner maintenance mode") });
@@ -2972,7 +3130,7 @@ for (const name of premiumCommandNames) registerSuggested(name, { run: async ({ 
   if (["muted", "smartmute", "smartunmute"].includes(name)) { const target = getTargetJid(msg, args); data.muted ||= []; if (name === "smartmute" && target && !data.muted.includes(target)) data.muted.push(target); if (name === "smartunmute" && target) data.muted = data.muted.filter((x) => x !== target); return sock.sendMessage(from, { text: `🔇 Muted members: ${data.muted.map((x) => displayUser(x)).join(", ") || "None"}` }); }
   if (name === "securityscore") { const t = getToggles(from); const active = ["antilink", "antibadword", "antispam", "antiflood", "antiraid", "antiinvite"].filter((k) => t[k]).length; return sock.sendMessage(from, { text: `🛡️ *SECURITY SCORE: ${Math.min(100, active * 15 + (await isBotAdmin(sock, from) ? 10 : 0))}/100*\nActive protections: ${active}` }); }
   if (["activity", "groupdigest", "commandstats", "backupstatus", "grouphealth", "moderationpanel"].includes(name)) return sock.sendMessage(from, { text: `📊 *${name.toUpperCase()}*\n\nCommands loaded: ${commands.size}\nTracked commands: ${data.commandCount || 0}\nWarnings: ${data.warnings || 0}\nBackup: ${data.backup ? "AVAILABLE" : "READY"}` });
-  if (name === "multibackup") { data.backups ||= []; if (mode === "create") data.backups.push({ at: new Date().toISOString(), toggles: getToggles(from), settings: { ...getGroupMessageSettings(from) } }); if (mode === "restore" && data.backups[Number(args[1]) - 1]) { const b = data.backups[Number(args[1]) - 1]; Object.assign(getGroupMessageSettings(from), b.settings); toggleState.set(from, { ...defaultToggles, ...b.toggles }); } return sock.sendMessage(from, { text: `💾 Multi-backups available: ${data.backups.length}` }); }
+  if (name === "multibackup") { data.backups ||= []; if (mode === "create") data.backups.push({ at: new Date().toISOString(), toggles: getToggles(from), settings: { ...getGroupMessageSettings(from) } }); if (mode === "restore" && data.backups[Number(args[1]) - 1]) { const b = data.backups[Number(args[1]) - 1]; Object.assign(getGroupMessageSettings(from), b.settings); toggleState.set(from, { ...defaultToggles, ...b.toggles }); saveRepeatGuardToggleState(); } return sock.sendMessage(from, { text: `💾 Multi-backups available: ${data.backups.length}` }); }
   if (["commanddisable", "commandenable"].includes(name)) { data.disabled ||= []; if (name === "commanddisable" && args[0] && !data.disabled.includes(args[0])) data.disabled.push(args[0]); if (name === "commandenable") data.disabled = data.disabled.filter((x) => x !== args[0]); return sock.sendMessage(from, { text: `🚫 Disabled commands: ${data.disabled.join(", ") || "None"}` }); }
   if (["anonymous", "suggest"].includes(name)) { await sock.sendMessage(suggestedOwnerInbox(sock), { text: `💡 ${name.toUpperCase()}\nFrom: ${from}\n${args.join(" ")}` }); return sock.sendMessage(from, { text: "✅ Sent privately to the owner." }); }
   data[name] = mode === "off" ? false : mode === "on" ? true : (data[name] ?? true);
@@ -2992,7 +3150,7 @@ for (const name of advancedNames) registerSuggested(name, { owner: ["broadcastgr
   if (name === "verify") return sock.sendMessage(from, { text: "✅ Verification request recorded. An admin must review this member." });
   if (["quarantine", "release"].includes(name)) { const target = getTargetJid(msg, args); if (!target) return sock.sendMessage(from, { text: `Usage: .${name} @member` }); data[name] ||= []; if (name === "quarantine") data[name].push(target); else data.quarantine = (data.quarantine || []).filter((id) => id !== target); return sock.sendMessage(from, { text: `✅ ${displayUser(target)} ${name === "quarantine" ? "marked for quarantine" : "released"}.` }); }
   if (name === "trustlevel" || name === "riskcheck") return sock.sendMessage(from, { text: `🛡️ *${name.toUpperCase()}*\n\nUser history: ${data.warnings || "No local risk events recorded."}` });
-  if (name === "snapshot" || name === "rollback") { if (name === "snapshot") data.snapshot = { ...getGroupMessageSettings(from), toggles: getToggles(from) }; else if (data.snapshot) { Object.assign(getGroupMessageSettings(from), data.snapshot); toggleState.set(from, { ...defaultToggles, ...(data.snapshot.toggles || {}) }); } return sock.sendMessage(from, { text: `✅ ${name} ${name === "snapshot" ? "saved" : "completed"}.` }); }
+  if (name === "snapshot" || name === "rollback") { if (name === "snapshot") data.snapshot = { ...getGroupMessageSettings(from), toggles: getToggles(from) }; else if (data.snapshot) { Object.assign(getGroupMessageSettings(from), data.snapshot); toggleState.set(from, { ...defaultToggles, ...(data.snapshot.toggles || {}) }); saveRepeatGuardToggleState(); } return sock.sendMessage(from, { text: `✅ ${name} ${name === "snapshot" ? "saved" : "completed"}.` }); }
   data[name] = action === "off" ? false : action === "on" ? true : (data[name] ?? true);
   await sock.sendMessage(from, { text: `⚙️ *${name.toUpperCase()}*: ${data[name] ? "ON" : "OFF"}` });
 }});

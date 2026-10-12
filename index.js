@@ -1451,7 +1451,6 @@ function isController(sock, from, msg, sessionId) {
  * ============================================================ */
 async function handleMessage(sock, msg, sessionId) {
   try {
-    if (msg.key?.fromMe) return;
     const from = msg.key?.remoteJid;
     if (!from) return;
     const message = unwrapMessage(msg.message);

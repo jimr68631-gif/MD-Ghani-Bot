@@ -1009,7 +1009,9 @@ function wireHandlers(sessionId) {
       const deletedId = deletedKey?.id;
       const antideleteEnabled = getToggles(sessionId).antidelete ||
         (deletedChat?.endsWith("@g.us") && getToggles(deletedChat).antidelete);
-      if (revoke && deletedChat && deletedId && antideleteEnabled) {
+      // A bot-authored message deleted by the account owner should stay deleted;
+      // antidelete recovery remains enabled for messages sent by other people.
+      if (revoke && deletedChat && deletedId && antideleteEnabled && !deletedKey?.fromMe) {
         // Message IDs are unique per WhatsApp session; claim the deletion
         // synchronously so parallel/retried Baileys updates cannot report it twice.
         const deleteToken = `${sessionId}:${deletedId}`;

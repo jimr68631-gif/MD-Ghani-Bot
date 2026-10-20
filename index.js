@@ -557,6 +557,29 @@ function rememberProcessedCommand(token) {
     fs.appendFileSync(processedCommandCacheFile, `${JSON.stringify({ token, processedAt })}\n`);
   } catch (error) { log.warn(`command dedupe cache save failed: ${error?.message || error}`); }
 }
+// Atomically claim each command message on disk so two local bot processes
+// cannot both execute the same WhatsApp message.
+const processedCommandClaimsDir = path.resolve(config.sessionDir, ".processed-command-claims");
+function claimProcessedCommand(token) {
+  const claimFile = path.join(processedCommandClaimsDir, `${Buffer.from(token).toString("base64url")}.lock`);
+  try {
+    fs.mkdirSync(processedCommandClaimsDir, { recursive: true });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fd = fs.openSync(claimFile, "wx");
+        fs.writeSync(fd, String(Date.now()));
+        fs.closeSync(fd);
+        return true;
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+        const stat = fs.statSync(claimFile);
+        if (Date.now() - stat.mtimeMs < PROCESSED_COMMAND_TTL_MS) return false;
+        fs.rmSync(claimFile, { force: true });
+      }
+    }
+  } catch (error) { log.warn(`command claim failed: ${error?.message || error}`); }
+  return false;
+}
 const persistentMessageCache = new Map();
 const persistentMessageCacheFile = path.resolve(config.sessionDir, ".antidelete-message-cache.json");
 let persistentWriteTimer = null;
@@ -753,10 +776,18 @@ async function startSession(sessionId, phoneNumber) {
       log.info(`🟢 ${sessionId} connected`);
       sock.sendPresenceUpdate(getToggles(sessionId).alwaysonline ? "available" : "unavailable").catch(() => {});
       const connectedJid = `${String(sessionId).replace(/\D/g, "")}@s.whatsapp.net`;
+      const noticeMarker = path.join(dir, ".connected-notice-sent");
       if (connectedJid) {
-        sock.sendMessage(connectedJid, {
-          text: `✅ *${config.botName} Connected*\n\n📱 Session: ${sessionId}\n🟢 Status: Online\n\nType *${config.prefix}menu* to open the command menu.`,
-        }).catch((e) => log.error(`connect notice: ${e?.message || e}`));
+        // Send once per paired auth directory; reconnects do not resend it.
+        try {
+          const markerFd = fs.openSync(noticeMarker, "wx");
+          fs.closeSync(markerFd);
+          sock.sendMessage(connectedJid, {
+            text: `✅ *${config.botName} Connected*\n\n📱 Session: ${sessionId}\n🟢 Status: Online\n\nType *${config.prefix}menu* to open the command menu.`,
+          }).catch((e) => log.error(`connect notice: ${e?.message || e}`));
+        } catch (e) {
+          if (e?.code !== "EEXIST") log.error(`connect notice marker: ${e?.message || e}`);
+        }
       }
     }
     if (connection === "close") {
@@ -850,7 +881,8 @@ function wireHandlers(sessionId) {
         const legacyTokens = [...new Set([msg.key?.remoteJid, msg.key?.remoteJidAlt]
           .filter(Boolean).map((jid) => `${sessionId}:${jid}:${messageId}`))];
         if (commandText && (processedCommandMessages.has(messageToken) ||
-            legacyTokens.some((token) => processedCommandMessages.has(token)))) {
+            legacyTokens.some((token) => processedCommandMessages.has(token)) ||
+            !claimProcessedCommand(messageToken))) {
           processedUpsertMessages.add(messageToken);
           continue;
         }

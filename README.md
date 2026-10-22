@@ -1,44 +1,44 @@
 <!-- ═══════════════════════════════════════════════════════════════ -->
-<!--        MD-GHANI-BOT — LIGHTNING ANIMATION README (V11.0)        -->
+<!--        MD-GHANI-BOT — HYPER-DRIVE NEON README (V12.0)           -->
 <!-- ═══════════════════════════════════════════════════════════════ -->
 
 <div align="center">
 
-<!-- ⚡ Lightning Strike Header -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,4,11,19,25,30&height=360&section=header&text=MD-Ghani-Bot&fontSize=130&fontColor=ffffff&animation=blinking&fontAlignY=38&desc=⚡%20Lightning%20Powered%20Automation%20⚡&descAlignY=62&descSize=32&stroke=00FF88&strokeWidth=4" width="100%"/>
+<!-- 🌈 Hyper-Drive Neon Header -->
+<img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=6,12,18,24,29,30&height=350&section=header&text=MD-Ghani-Bot&fontSize=125&fontColor=ffffff&animation=twinkling&fontAlignY=38&desc=The%20Hyper-Drive%20WhatsApp%20Experience&descAlignY=62&descSize=30&stroke=7C5CFF&strokeWidth=4" width="100%"/>
 
-<!-- ⚡ Lightning Typing Animations -->
+<!-- ⌨️ Hyper-Drive Typing Animations -->
 <a href="https://git.io/typing-svg">
-  <img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=900&size=50&pause=900&color=00FF88&center=true&vCenter=true&width=1000&lines=⚡+STRIKING+WITH+POWER;⚡+FLASHING+WITH+SPEED;⚡+SHOCKING+PERFORMANCE;⚡+LIGHTNING+RELIABILITY" alt="Lightning Typing" />
+  <img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=900&size=50&pause=900&color=7C5CFF&center=true&vCenter=true&width=1000&lines=🚀+Hyper-Drive+Mode+Activated;🛡️+Neon-Secured+Architecture;🎨+Cyber-Elegance+Perfected;♾️+Infinite+Performance" alt="Hyper Typing" />
 </a>
 
 <br/>
 
 <a href="https://git.io/typing-svg">
-  <img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=600&size=26&pause=700&color=38E8FF&center=true&vCenter=true&width=1000&lines=⚡+Voltage+Architecture;⚡+High+Current+Performance;⚡+Static-Free+Scalability;⚡+Thunderclap+Uptime" alt="Subtitle" />
+  <img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=600&size=26&pause=700&color=38E8FF&center=true&vCenter=true&width=1000&lines=Next-Gen+Framework;Cloud-Optimized;Zero-Latency+Engine;Unbreakable+Core" alt="Subtitle" />
 </a>
 
 <br/><br/>
 
-<!-- ⚡ Lightning Badges Row 1 -->
+<!-- 🌈 Neon Badges Row 1 -->
 <p>
-  <img src="https://img.shields.io/badge/Node.js-20+-00FF88?style=for-the-badge&logo=nodedotjs&logoColor=black&labelColor=0a0a14"/>
-  <img src="https://img.shields.io/badge/Baileys-6.7+-25D366?style=for-the-badge&logo=whatsapp&logoColor=white&labelColor=0a0a14"/>
-  <img src="https://img.shields.io/badge/Railway-Ready-38E8FF?style=for-the-badge&logo=railway&logoColor=black&labelColor=0a0a14"/>
-  <img src="https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white&labelColor=0a0a14"/>
+  <img src="https://img.shields.io/badge/Node.js-20+-00FF88?style=for-the-badge&logo=nodedotjs&logoColor=black&labelColor=0d0d1a"/>
+  <img src="https://img.shields.io/badge/Baileys-6.7+-25D366?style=for-the-badge&logo=whatsapp&logoColor=white&labelColor=0d0d1a"/>
+  <img src="https://img.shields.io/badge/Railway-Ready-38E8FF?style=for-the-badge&logo=railway&logoColor=black&labelColor=0d0d1a"/>
+  <img src="https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white&labelColor=0d0d1a"/>
 </p>
 
-<!-- ⚡ Lightning Badges Row 2 -->
+<!-- 🌟 Neon Badges Row 2 -->
 <p>
-  <img src="https://img.shields.io/badge/Status-⚡_LIGHTNING_ONLINE-00FF88?style=for-the-badge&labelColor=0a0a14"/>
-  <img src="https://img.shields.io/badge/Voltage-1000%25-FF5CAB?style=for-the-badge&labelColor=0a0a14"/>
-  <img src="https://img.shields.io/badge/Quality-THUNDER-7C5CFF?style=for-the-badge&labelColor=0a0a14"/>
-  <img src="https://img.shields.io/badge/License-MIT-38E8FF?style=for-the-badge&labelColor=0a0a14"/>
+  <img src="https://img.shields.io/badge/Status-🟢_HYPER_ACTIVE-00FF88?style=for-the-badge&labelColor=0d0d1a"/>
+  <img src="https://img.shields.io/badge/Uptime-100%25-FF5CAB?style=for-the-badge&labelColor=0d0d1a"/>
+  <img src="https://img.shields.io/badge/Quality-NEON-7C5CFF?style=for-the-badge&labelColor=0d0d1a"/>
+  <img src="https://img.shields.io/badge/License-MIT-38E8FF?style=for-the-badge&labelColor=0d0d1a"/>
 </p>
 
 <br/>
 
-<!-- ⚡ Lightning Wave Divider -->
+<!-- 🌊 Neon Flow Divider -->
 <img src="https://raw.githubusercontent.com/trinib/trinib/82213791fa9ff58d3ca768ddd6de57f957b5a3f0/images/wave.svg" width="100%"/>
 
 </div>
@@ -51,25 +51,25 @@
 
 <br/><br/>
 
-<!-- ⚡ Lightning Hero Animation -->
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=900&size=65&pause=900&color=00FF88&center=true&vCenter=true&width=1100&lines=⚡+POWER+THAT+STRIKES+⚡" alt="Hero" />
+<!-- 🎭 Hyper Hero -->
+<img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=900&size=62&pause=900&color=38E8FF&center=true&vCenter=true&width=1100&lines=🌌+HYPER-DRIVE+ENGAGED" alt="Hero" />
 
 <br/>
 
 <h1>
-  <i>✦ The Lightning Apex of WhatsApp Bots ✦</i>
+  <i>✦ The Hyper-Drive Apex of WhatsApp Bots ✦</i>
 </h1>
 
 <br/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=600&size=28&pause=700&color=38E8FF&center=true&vCenter=true&width=1100&lines=Engineered+for+Electric+Performance;Designed+to+Astonish;Built+to+Endure+the+Storm" alt="Tagline" />
+<img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=600&size=28&pause=700&color=7C5CFF&center=true&vCenter=true&width=1100&lines=Engineered+for+Hyper-Speed;Designed+for+Neon+Elegance;Built+for+Infinite+Uptime" alt="Tagline" />
 
 <br/><br/><br/>
 
-<!-- ⚡ Lightning Quote -->
-> ⚡ **"A bot so powerful, it feels like lightning."**
+<!-- 💫 Neon Quote -->
+> 🚀 **"A bot so fast, it breaks the speed barrier."**
 >
-> ⚡ *Fast* • ⚡ *Powerful* • ⚡ *Reliable* • ⚡ *Eternal*
+> 🚀 *Hyper* • 🛡️ *Secure* • 🎨 *Neon* • ♾️ *Infinite*
 
 <br/><br/>
 
@@ -87,20 +87,20 @@
 
 <br/>
 
-## ⚡ **The Lightning Philosophy**
+## 🌈 **The Hyper-Drive Philosophy**
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=32&pause=900&color=FF5CAB&center=true&vCenter=true&width=900&lines=🚀+Where+Lightning+Meets+Precision" alt="Philosophy" />
+<img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=700&size=32&pause=900&color=FF5CAB&center=true&vCenter=true&width=900&lines=⚡+Where+Speed+Meets+Neon" alt="Philosophy" />
 
 <br/><br/>
 
 <h2>
   <i>"We didn't just build a bot.<br/>
-  We built a lightning storm."</i>
+  We built a hyper-drive engine."</i>
 </h2>
 
 <br/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=500&size=26&pause=700&color=38E8FF&center=true&vCenter=true&width=900&lines=Electric+Precision;Shocking+Elegance;Infinite+Power" alt="Philosophy Sub" />
+<img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=500&size=26&pause=700&color=38E8FF&center=true&vCenter=true&width=900&lines=Absolute+Velocity;Neon+Precision;Infinite+Potential" alt="Philosophy Sub" />
 
 <br/><br/><br/>
 
@@ -109,32 +109,32 @@
 <table align="center" width="95%">
 <tr>
 
-<td align="center" width="50%" style="background: linear-gradient(145deg, #0a0a14, #1a1a2e); border-radius: 50px; border: 6px solid #00FF88; padding: 55px; box-shadow: 0 0 80px #00FF88;">
+<td align="center" width="50%" style="background: linear-gradient(145deg, #0d0d1a, #1a1a2e); border-radius: 45px; border: 6px solid #38E8FF; padding: 50px; box-shadow: 0 0 70px #38E8FF;">
 
 <img src="https://media.giphy.com/media/LMt9638dO8dftAjtco/giphy.gif" width="150"/>
 
 <br/><br/>
 
-<h3>⚡ <b>Electric Speed</b></h3>
+<h3>⚡ <b>Hyper Speed</b></h3>
 
 <p>
-<i>Every millisecond optimized.<br/>
-Every action lightning-fast.</i>
+<i>Beyond the speed barrier.<br/>
+Every action instantaneous.</i>
 </p>
 
 </td>
 
-<td align="center" width="50%" style="background: linear-gradient(145deg, #0a0a14, #1a1a2e); border-radius: 50px; border: 6px solid #FF5CAB; padding: 55px; box-shadow: 0 0 80px #FF5CAB;">
+<td align="center" width="50%" style="background: linear-gradient(145deg, #0d0d1a, #1a1a2e); border-radius: 45px; border: 6px solid #7C5CFF; padding: 50px; box-shadow: 0 0 70px #7C5CFF;">
 
 <img src="https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif" width="150"/>
 
 <br/><br/>
 
-<h3>⚡ <b>Shocking Beauty</b></h3>
+<h3>🎨 <b>Neon Beauty</b></h3>
 
 <p>
-<i>Designed to mesmerize.<br/>
-Built to shock the world.</i>
+<i>Designed to glow forever.<br/>
+Built to mesmerize.</i>
 </p>
 
 </td>
@@ -152,8 +152,8 @@ Built to shock the world.</i>
 
 <br/><br/><br/>
 
-## ⚡ **The Lightning Pairing Experience**
+## 🌈 **The Hyper-Drive Pairing Experience**
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=32&pause=900&color=00FF88&center=true&vCenter=true&width=900&lines=✨+A+Shocking+Visual+Masterpiece" alt="Panel" />
+<img src="https://readme-typing-svg.demolab.com?font=Audiowide&weight=700&size=32&pause=900&color=38E8FF&center=true&vCenter=true&width=900&lines=✨+A+Neon+Masterpiece" alt="Panel" />
 
 <br/><br/>

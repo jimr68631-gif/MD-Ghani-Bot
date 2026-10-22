@@ -1,26 +1,26 @@
 <!-- ═══════════════════════════════════════════════════════════════ -->
-<!--       MD-GHANI-BOT — COSMIC INFINITY README (V7.0)              -->
+<!--       MD-GHANI-BOT — PRIMARY ULTRA-PREMIUM README (V8.0)        -->
 <!-- ═══════════════════════════════════════════════════════════════ -->
 
 <div align="center">
 
-<!-- 🌌 Cosmic Infinity Header -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,3,8,16,24,30&height=340&section=header&text=MD-Ghani-Bot&fontSize=115&fontColor=ffffff&animation=fadeIn&fontAlignY=35&desc=Cosmic%20Infinity%20WhatsApp%20Experience&descAlignY=60&descSize=30&stroke=38E8FF&strokeWidth=3" width="100%"/>
+<!-- 🌌 Primary Cosmic Header -->
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,3,8,16,24,30&height=350&section=header&text=MD-Ghani-Bot&fontSize=120&fontColor=ffffff&animation=fadeIn&fontAlignY=35&desc=The%20Primary%20WhatsApp%20Experience&descAlignY=62&descSize=32&stroke=38E8FF&strokeWidth=3" width="100%"/>
 
-<!-- ⌨️ Cosmic Typing SVG (Dual Line) -->
+<!-- ⌨️ Primary Dual Typing SVG -->
 <a href="https://git.io/typing-svg">
-  <img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=900&size=46&pause=1000&color=7C5CFF&center=true&vCenter=true&width=1000&lines=⚡+Redefining+the+Impossible;🛡️+Beyond+Human+Security;🎨+Art+in+Motion;♾️+Eternally+Reliable" alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=900&size=48&pause=1000&color=7C5CFF&center=true&vCenter=true&width=1000&lines=⚡+The+Absolute+Standard;🛡️+Beyond+Human+Security;🎨+Art+in+Motion;♾️+Eternally+Reliable" alt="Typing SVG" />
 </a>
 
 <br/>
 
 <a href="https://git.io/typing-svg">
-  <img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=600&size=24&pause=800&color=38E8FF&center=true&vCenter=true&width=1000&lines=Next-Generation+Architecture;Cloud-Native+Performance;Infinite+Scalability;Unbreakable+Uptime" alt="Subtitle" />
+  <img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=600&size=26&pause=800&color=38E8FF&center=true&vCenter=true&width=1000&lines=Next-Generation+Architecture;Cloud-Native+Performance;Infinite+Scalability;Unbreakable+Uptime" alt="Subtitle" />
 </a>
 
 <br/><br/>
 
-<!-- 💎 Cosmic Badges Row 1 -->
+<!-- 💎 Primary Badges Row 1 -->
 <p>
   <img src="https://img.shields.io/badge/Node.js-20+-00FF88?style=for-the-badge&logo=nodedotjs&logoColor=white&labelColor=000000"/>
   <img src="https://img.shields.io/badge/Baileys-6.7+-25D366?style=for-the-badge&logo=whatsapp&logoColor=white&labelColor=000000"/>
@@ -28,17 +28,17 @@
   <img src="https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white&labelColor=000000"/>
 </p>
 
-<!-- 🌟 Cosmic Badges Row 2 -->
+<!-- 🌟 Primary Badges Row 2 -->
 <p>
-  <img src="https://img.shields.io/badge/Status-🟢_Cosmic_Online-00FF88?style=for-the-badge&labelColor=000000"/>
+  <img src="https://img.shields.io/badge/Status-🟢_Primary_Online-00FF88?style=for-the-badge&labelColor=000000"/>
   <img src="https://img.shields.io/badge/Uptime-100%25-FF5CAB?style=for-the-badge&labelColor=000000"/>
-  <img src="https://img.shields.io/badge/Quality-Cosmic-7C5CFF?style=for-the-badge&labelColor=000000"/>
+  <img src="https://img.shields.io/badge/Quality-Primary-7C5CFF?style=for-the-badge&labelColor=000000"/>
   <img src="https://img.shields.io/badge/License-MIT-38E8FF?style=for-the-badge&labelColor=000000"/>
 </p>
 
 <br/>
 
-<!-- 🌊 Cosmic Wave -->
+<!-- 🌊 Primary Wave -->
 <img src="https://raw.githubusercontent.com/trinib/trinib/82213791fa9ff58d3ca768ddd6de57f957b5a3f0/images/wave.svg" width="100%"/>
 
 </div>
@@ -51,25 +51,25 @@
 
 <br/><br/>
 
-<!-- 🎭 Cosmic Hero Typing -->
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=900&size=60&pause=1000&color=7C5CFF&center=true&vCenter=true&width=1100&lines=🌌+INFINITY+BEYOND+ORDINARY" alt="Hero" />
+<!-- 🎭 Primary Hero Typing -->
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=900&size=65&pause=1000&color=7C5CFF&center=true&vCenter=true&width=1100&lines=🌌+THE+PRIMARY+STANDARD" alt="Hero" />
 
 <br/>
 
 <h1>
-  <i>✦ The Cosmic Apex of WhatsApp Bots ✦</i>
+  <i>✦ The Primary Apex of WhatsApp Bots ✦</i>
 </h1>
 
 <br/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=600&size=26&pause=800&color=38E8FF&center=true&vCenter=true&width=1100&lines=Engineered+for+Perfection;Designed+to+Astonish;Built+to+Endure" alt="Tagline" />
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=600&size=28&pause=800&color=38E8FF&center=true&vCenter=true&width=1100&lines=Engineered+for+Perfection;Designed+to+Astonish;Built+to+Endure" alt="Tagline" />
 
 <br/><br/><br/>
 
-<!-- 💫 Cosmic Quote Block -->
-> 🧠 **"A bot that doesn't just work — it redefines the standard."**
+<!-- 💫 Primary Quote Block -->
+> 🧠 **"A bot that doesn't just work — it sets the primary standard."**
 >
-> ⚡ *Cosmic* • 🛡️ *Unbreakable* • 🎨 *Masterpiece* • ♾️ *Eternal*
+> ⚡ *Primary* • 🛡️ *Unbreakable* • 🎨 *Masterpiece* • ♾️ *Eternal*
 
 <br/><br/>
 
@@ -87,20 +87,20 @@
 
 <br/>
 
-## 🌟 **The Cosmic Essence**
+## 🌟 **The Primary Essence**
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=30&pause=900&color=FF5CAB&center=true&vCenter=true&width=800&lines=🚀+Beyond+Greatness" alt="Essence" />
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=32&pause=900&color=FF5CAB&center=true&vCenter=true&width=900&lines=🚀+Setting+the+Standard" alt="Essence" />
 
 <br/><br/>
 
 <h2>
   <i>"We didn't just build a bot.<br/>
-  We engineered infinity."</i>
+  We defined the primary standard."</i>
 </h2>
 
 <br/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=500&size=24&pause=800&color=38E8FF&center=true&vCenter=true&width=800&lines=Absolute+Precision;Unmatched+Elegance;Infinite+Potential" alt="Essence Sub" />
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=500&size=26&pause=800&color=38E8FF&center=true&vCenter=true&width=900&lines=Absolute+Precision;Unmatched+Elegance;Infinite+Potential" alt="Essence Sub" />
 
 <br/><br/><br/>
 
@@ -109,13 +109,13 @@
 <table align="center" width="95%">
 <tr>
 
-<td align="center" width="50%" style="background: linear-gradient(145deg, #000000, #0a0a1a); border-radius: 40px; border: 5px solid #38E8FF; padding: 45px; box-shadow: 0 0 60px #38E8FF;">
+<td align="center" width="50%" style="background: linear-gradient(145deg, #000000, #0a0a1a); border-radius: 45px; border: 6px solid #38E8FF; padding: 50px; box-shadow: 0 0 70px #38E8FF;">
 
-<img src="https://media.giphy.com/media/LMt9638dO8dftAjtco/giphy.gif" width="140"/>
+<img src="https://media.giphy.com/media/LMt9638dO8dftAjtco/giphy.gif" width="150"/>
 
 <br/><br/>
 
-<h3>⚡ <b>Flawless Precision</b></h3>
+<h3>⚡ <b>Primary Precision</b></h3>
 
 <p>
 <i>Every nanosecond optimized.<br/>
@@ -124,13 +124,13 @@ Every action perfect.</i>
 
 </td>
 
-<td align="center" width="50%" style="background: linear-gradient(145deg, #000000, #0a0a1a); border-radius: 40px; border: 5px solid #FF5CAB; padding: 45px; box-shadow: 0 0 60px #FF5CAB;">
+<td align="center" width="50%" style="background: linear-gradient(145deg, #000000, #0a0a1a); border-radius: 45px; border: 6px solid #FF5CAB; padding: 50px; box-shadow: 0 0 70px #FF5CAB;">
 
-<img src="https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif" width="140"/>
+<img src="https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif" width="150"/>
 
 <br/><br/>
 
-<h3>🎨 <b>Cosmic Elegance</b></h3>
+<h3>🎨 <b>Primary Elegance</b></h3>
 
 <p>
 <i>Designed to mesmerize.<br/>
@@ -152,8 +152,8 @@ Built to last forever.</i>
 
 <br/><br/><br/>
 
-## 🎨 **The Cosmic Pairing Panel**
+## 🎨 **The Primary Pairing Panel**
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=30&pause=900&color=7C5CFF&center=true&vCenter=true&width=800&lines=✨+A+Visual+Masterpiece" alt="Panel" />
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=32&pause=900&color=7C5CFF&center=true&vCenter=true&width=900&lines=✨+A+Visual+Masterpiece" alt="Panel" />
 
 <br/><br/>

@@ -1,5 +1,5 @@
 <!-- ═══════════════════════════════════════════════════════════ -->
-<!--      MD-GHANI-BOT — APEX PREMIUM README (V3.0)              -->
+<!--      MD-GHANI-BOT — APEX PREMIUM README (V3.1)              -->
 <!-- ═══════════════════════════════════════════════════════════ -->
 
 <div align="center">
@@ -84,69 +84,52 @@
 
 <div align="center">
 
-## 💎 **The Four Pillars of Excellence**
+## ✨ **The Vision**
 
-<img src="https://readme-typing-svg.demolab.com?font=Rajdhani&weight=700&size=22&pause=900&color=FF5CAB&center=true&vCenter=true&width=600&lines=✨+What+Makes+It+Unstoppable" alt="Why" />
+<img src="https://readme-typing-svg.demolab.com?font=Rajdhani&weight=700&size=22&pause=900&color=FF5CAB&center=true&vCenter=true&width=600&lines=🚀+Built+to+Redefine+the+Standard" alt="Vision" />
+
+<br/><br/>
+
+<h3>
+  <i>"We didn't just build a bot.<br/>
+  We built an experience."</i>
+</h3>
+
+<br/>
+
+<img src="https://readme-typing-svg.demolab.com?font=Rajdhani&weight=500&size=16&pause=800&color=38E8FF&center=true&vCenter=true&width=600&lines=Precision+Engineering;Elegant+Design;Unmatched+Performance" alt="Vision Sub" />
 
 <br/><br/>
 
 </div>
 
-<table align="center">
+<table align="center" width="85%">
 <tr>
+<td align="center" width="50%" style="background: linear-gradient(145deg, #0a0e27, #1a1a3a); border-radius: 18px; border: 2px solid #38E8FF; padding: 25px;">
 
-<td align="center" width="25%" style="background: linear-gradient(145deg, #0a0e27, #1a1a3a); border-radius: 20px; border: 2px solid #38E8FF; padding: 20px;">
-
-<img src="https://media.giphy.com/media/LMt9638dO8dftAjtco/giphy.gif" width="90"/>
-
-<br/><br/>
-
-### ⚡ **Lightning Fast**
-
-**Instant** response times
-*Zero lag, ever*
-
-</td>
-
-<td align="center" width="25%" style="background: linear-gradient(145deg, #0a0e27, #1a1a3a); border-radius: 20px; border: 2px solid #FF5CAB; padding: 20px;">
-
-<img src="https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif" width="90"/>
+<img src="https://media.giphy.com/media/LMt9638dO8dftAjtco/giphy.gif" width="70"/>
 
 <br/><br/>
 
-### 🛡️ **Bulletproof**
+### ⚡ **Precision**
 
-**Enterprise** security
-*Full protection*
+Every millisecond counts.
+Every action is instant.
 
 </td>
 
-<td align="center" width="25%" style="background: linear-gradient(145deg, #0a0e27, #1a1a3a); border-radius: 20px; border: 2px solid #7C5CFF; padding: 20px;">
+<td align="center" width="50%" style="background: linear-gradient(145deg, #0a0e27, #1a1a3a); border-radius: 18px; border: 2px solid #FF5CAB; padding: 25px;">
 
-<img src="https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif" width="90"/>
+<img src="https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif" width="70"/>
 
 <br/><br/>
 
-### 🎨 **Beautiful UI**
+### 🎨 **Elegance**
 
-**Animated** panel
-*Modern design*
-
-</td>
-
-<td align="center" width="25%" style="background: linear-gradient(145deg, #0a0e27, #1a1a3a); border-radius: 20px; border: 2px solid #00FF88; padding: 20px;">
-
-<img src="https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif" width="90"/>
-
-<br/><br/>
-
-### ♾️ **Never Stops**
-
-**Auto-reconnect**
-*Zero downtime*
+Designed to impress.
+Built to endure.
 
 </td>
-
 </tr>
 </table>
 
